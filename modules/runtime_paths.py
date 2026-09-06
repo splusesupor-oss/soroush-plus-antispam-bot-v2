@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -24,6 +25,23 @@ from pathlib import Path
 from typing import Iterable
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _instance_name() -> str:
+    """نام instance از متغیر محیطی ``BOT_INSTANCE`` (پیش‌فرض: ``main``).
+
+    برای اجرای همزمان چند instance ربات در یک دستگاه (مثلاً دو clone در
+    یک Termux): instance اصلی مسیر تاریخی خود را حفظ می‌کند تا داده‌های
+    موجود دست‌نخورده بمانند؛ هر instance دیگر (``BOT_INSTANCE=bot2``)
+    در مجاورت همان مسیر، دایرکتوری مستقل می‌گیرد:
+    ``~/.local/share/soroush-bot-<instance>/``
+    """
+    raw = os.environ.get("BOT_INSTANCE", "main").strip() or "main"
+    slug = re.sub(r"[^A-Za-z0-9._-]", "_", raw)[:32]
+    return slug or "main"
+
+
+INSTANCE_NAME = _instance_name()
 
 
 def _is_termux() -> bool:
@@ -37,9 +55,15 @@ def _chosen_data_dir() -> Path:
     if explicit:
         return Path(explicit).expanduser().resolve()
     if _is_termux():
-        return (Path.home() / ".local" / "share" / "soroush-bot").resolve()
-    # Keep existing tests and ordinary Linux installs backwards compatible.
-    return PROJECT_ROOT
+        if INSTANCE_NAME == "main":
+            # instance اصلی مسیر تاریخی را نگه می‌دارد (مهاجرت داده لازم نیست).
+            return (Path.home() / ".local" / "share" / "soroush-bot").resolve()
+        return (Path.home() / ".local" / "share" / f"soroush-bot-{INSTANCE_NAME}").resolve()
+    if INSTANCE_NAME == "main":
+        # Keep existing tests and ordinary Linux installs backwards compatible.
+        return PROJECT_ROOT
+    # instance غیراصلی روی سیستم غیر-Termux: دایرکتوری اختصاصی در home.
+    return (Path.home() / ".local" / "share" / f"soroush-bot-{INSTANCE_NAME}").resolve()
 
 
 DATA_DIR = _chosen_data_dir()
@@ -158,6 +182,7 @@ def legacy_log_file(name: str) -> Path:
 
 def describe() -> dict:
     return {
+        "instance": INSTANCE_NAME,
         "project_root": str(PROJECT_ROOT),
         "data_dir": str(DATA_DIR),
         "config_dir": str(CONFIG_DIR),

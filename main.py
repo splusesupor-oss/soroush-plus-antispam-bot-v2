@@ -64,6 +64,16 @@ def _release_instance_lock(lock, pid):
 
 async def main():
     _acquire_instance_lock()
+    try:
+        from modules import runtime_paths
+        _info = runtime_paths.describe()
+        print(
+            f"[INSTANCE] bot_instance={_info['instance']} "
+            f"data_dir={_info['data_dir']} config_dir={_info['config_dir']} "
+            f"log_dir={_info['log_dir']} db_dir={_info['db_dir']}"
+        )
+    except Exception:
+        pass
     # نمایشِ زمانِ واقعیِ تهران در ترمینال هنگام راه‌اندازی، تا مشخص باشد
     # ربات واقعاً با چه زمانی کار می‌کند.
     _now = now_local()

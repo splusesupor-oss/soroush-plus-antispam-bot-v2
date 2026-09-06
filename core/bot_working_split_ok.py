@@ -591,8 +591,16 @@ class SoroushAntiSpamBot:
         تازه از همان session string می‌سازد تا sender/state/receive loop
         همگی از صفر باشند.
         """
-        session_str = os.getenv("SOROUSH_SESSION_STRING") or self.config_manager.get(
-            "session_string", "")
+        # سشن هر instance مستقل است: اگر BOT_INSTANCE ست شده باشد، اول
+        # متغیر اختصاصی آن instance (SOROUSH_SESSION_STRING_<INSTANCE>) و
+        # بعد متغیر عمومی چک می‌شود. هیچ‌وقت سشن یک instance به دیگری
+        # منتقل یا overwrite نمی‌شود.
+        _instance_env = os.getenv("BOT_INSTANCE", "main").strip() or "main"
+        session_str = (
+            os.getenv(f"SOROUSH_SESSION_STRING_{_instance_env.upper()}")
+            or os.getenv("SOROUSH_SESSION_STRING")
+            or self.config_manager.get("session_string", "")
+        )
         api_id = os.getenv("API_ID") or self.config_manager.get("api_id")
         api_hash = os.getenv("API_HASH") or self.config_manager.get("api_hash")
 
