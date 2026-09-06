@@ -40,7 +40,14 @@ def load_groups():
     else:
         try:
             _cache = json.loads(FILE.read_text(encoding="utf-8"))
-        except Exception:
+        except Exception as _corrupt:
+            # دلیل خرابی باید در ترمینال دیده شود: تا این فایل سالم
+            # نشود، همه گروه‌ها inactive و ربات در همه جا بی‌صداست.
+            print(
+                "⛔ GROUPS FILE CORRUPT/UNREADABLE (%s) — all groups "
+                "treated as INACTIVE until the file is fixed: %s"
+                % (_corrupt, FILE)
+            )
             _cache = {}
 
     _cache_mtime = mtime

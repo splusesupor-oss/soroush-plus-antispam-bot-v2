@@ -18,6 +18,7 @@ from modules.owner_private import remember_owner_peer
 from modules.group_expiry import match_command as expiry_command
 from modules.expiry_report import build_report as build_expiry_report
 from modules.admin_tools import run_cleanup_watcher
+from modules import access_profile_guard
 from handlers.group_expiry_handler import (
     run_expiry_watcher as run_group_expiry_watcher,
 )
@@ -139,6 +140,34 @@ try:
 except Exception:  # pragma: no cover - اگر ماژول در دسترس نبود، ربات بی‌ضرر ادامه می‌دهد
     _MEDIA_UPLOAD_PATCH_AVAILABLE = False
 # ---------------------------------------------------
+
+
+# 📢 دلیل دورریختن پیام گروه‌های inactive باید در ترمینال دیده شود؛
+# بدون این لاگ، سکوت ناگهانی یک گروه (groups.json خراب/انقضا/
+# ناهماهنگی id) غیرقابل ردیابی بود.
+_INACTIVE_GATE_LOGGED = {}
+
+
+def _log_inactive_gate(bot, chat_id, text):
+    try:
+        now = time.monotonic()
+        if now - _INACTIVE_GATE_LOGGED.get(chat_id, 0.0) < 300:
+            return
+        _INACTIVE_GATE_LOGGED[chat_id] = now
+        if len(_INACTIVE_GATE_LOGGED) > 500:
+            for key in [
+                key for key, ts in _INACTIVE_GATE_LOGGED.items()
+                if now - ts > 600
+            ]:
+                _INACTIVE_GATE_LOGGED.pop(key, None)
+        bot.logger.log_error(
+            "GROUP GATE INACTIVE — message dropped "
+            f"chat_id={chat_id} text={str(text or '')[:30]!r} "
+            "reason=group not active in groups.json "
+            "(بررسی: دستور «فعال» مالک، انقضای گروه، سالم بودن فایل groups.json)"
+        )
+    except Exception:
+        pass
 
 
 class SoroushAntiSpamBot:
@@ -1378,7 +1407,32 @@ class SoroushAntiSpamBot:
                     )
                 chat_id = getattr(event, "chat_id", None)
 
+                # 🔒 Profile Access Guard check in priority commands
+                # Live reason() check is the only detection source; the stored
+                # record is never re-injected as a reason and a renamed user is
+                # restored on the first clean message (see sync_block_state).
+                if sender_id and not is_global_owner(sender_id):
+                    profile_bio = next((getattr(sender, n, None) for n in ("about", "bio", "biography") if getattr(sender, n, None)), None) if sender else None
+                    guard_status, profile_reason = access_profile_guard.sync_block_state(
+                        sender, sender_id, profile_bio)
+                    if guard_status == access_profile_guard.STATUS_BLOCKED:
+                        self.logger.log_info(
+                            f"PROFILE ACCESS RESTRICTION ACTIVE user_id={sender_id} "
+                            f"name={getattr(sender, 'first_name', '')!r} reason={profile_reason!r}"
+                        )
+                        await access_profile_guard.send_restriction_notice(
+                            event, client=self.client, chat_id=chat_id)
+                        return
+                    if guard_status == access_profile_guard.STATUS_HELD:
+                        self.logger.log_info(
+                            f"PROFILE ACCESS RESTRICTION HELD user_id={sender_id} "
+                            f"reason=profile_unverifiable")
+                        return
+                    if guard_status == access_profile_guard.STATUS_RESTORED:
+                        self.logger.log_info(f"PROFILE ACCESS RESTORED user_id={sender_id}")
+
                 if chat_id is None or not is_active(chat_id):
+                    _log_inactive_gate(self, chat_id, text)
                     if (
                         expiry_command(text) is not None
                         and is_global_owner(sender_id)
@@ -1515,6 +1569,8 @@ class SoroushAntiSpamBot:
                         f"error={_entry_error!r}"
                     )
                 raw_text = event.message.message or ""
+                # Profile access guard runs before every command/game handler.
+                profile_user = _entry_sender
                 command_priority_text = normalize_command_text(raw_text)
                 command_priority = command_priority_text in {
                     "راهنما", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها",
@@ -1535,6 +1591,52 @@ class SoroushAntiSpamBot:
                     f"text={raw_text!r} normalized={command_priority_text!r} "
                     f"priority={command_priority}"
                 )
+                profile_id = getattr(profile_user, "id", None) or getattr(event, "sender_id", None)
+                if profile_id and not is_global_owner(profile_id):
+                    profile_bio = next((getattr(profile_user, n, None) for n in ("about", "bio", "biography") if getattr(profile_user, n, None)), None) if profile_user else None
+                    # SoroushClient does not expose get_full_user; use only
+                    # fields present on the received User entity and make the
+                    # limitation explicit in runtime logs.
+                    self.debug_message_log(
+                        "PROFILE GUARD USER INFO\n"
+                        f"username={getattr(profile_user, 'username', None)!r}\n"
+                        f"name={' '.join(str(x) for x in (getattr(profile_user, 'first_name', None), getattr(profile_user, 'last_name', None)) if x)!r}\n"
+                        f"bio={profile_bio!r}"
+                    )
+                    if profile_bio is None:
+                        self.debug_message_log(
+                            "PROFILE GUARD BIO UNAVAILABLE "
+                            "reason=SoroushClient_User_entity_has_no_about_field"
+                        )
+                    # 🔒 Profile Access Guard — مسیر پیام‌های معمولی.
+                    # همان منبع واحد تصمیم‌گیری که مسیر دستورهای اولویت‌دار
+                    # و هندلر استفاده می‌کنند: فقط چک زندهٔ reason() (نام/
+                    # یوزرنیم/بیوی *فعلی*) منبع تشخیص است و رکورد ذخیره‌شده
+                    # هرگز به‌عنوان دلیل تزریق نمی‌شود. بنابراین کاربری که
+                    # نامش را اصلاح کرده، در اولین پیام بعدی رکورد کهنه‌اش
+                    # حذف (unblock) و پردازش عادی ادامه می‌یابد؛ نه اینکه
+                    # برای همیشه با همان اعلان قدیمی دوباره بلوک شود
+                    # (جزئیات: sync_block_state).
+                    guard_status, profile_reason = access_profile_guard.sync_block_state(
+                        profile_user, profile_id, profile_bio)
+                    if guard_status == access_profile_guard.STATUS_BLOCKED:
+                        self.logger.log_info(
+                            f"PROFILE ACCESS RESTRICTION ACTIVE user_id={profile_id} "
+                            f"name={getattr(profile_user, 'first_name', '')!r} reason={profile_reason!r}"
+                        )
+                        await access_profile_guard.send_restriction_notice(
+                            event, client=self.client,
+                            chat_id=getattr(event, "chat_id", None))
+                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_733' chat_id={_sd_chat} message_id={_sd_mid}")
+                        return
+                    if guard_status == access_profile_guard.STATUS_HELD:
+                        self.logger.log_info(
+                            f"PROFILE ACCESS RESTRICTION HELD user_id={profile_id} "
+                            f"reason=profile_unverifiable")
+                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_733' chat_id={_sd_chat} message_id={_sd_mid}")
+                        return
+                    if guard_status == access_profile_guard.STATUS_RESTORED:
+                        self.logger.log_info(f"PROFILE ACCESS RESTORED user_id={profile_id}")
                 # کاربر ممکن است «اطلاع‌رسانی» را با نیم‌فاصله (ZWNJ) بنویسد — همان
                 # املایی که خودِ ربات در پیام‌هایش به کار می‌برد. مقایسهٔ خام آن را
                 # رد می‌کرد و دستور بی‌صدا نادیده گرفته می‌شد.
@@ -1993,6 +2095,7 @@ class SoroushAntiSpamBot:
                             title = getattr(chat_lock, "title", "")
                             activate_group(lock_id, title)
                         else:
+                            _log_inactive_gate(self, lock_id, text)
                             self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_1135' chat_id={_sd_chat} message_id={_sd_mid}")
                             return
 
@@ -2376,6 +2479,10 @@ class SoroushAntiSpamBot:
             Returning immediately lets SPlusthon keep delivering other chats
             while this chat's worker processes its own queue.
             """
+            try:
+                _last_event_at[0] = time.monotonic()
+            except Exception:
+                pass
             # Entry gate: the same group message may arrive twice (NewMessage
             # then MessageEdited / replay); only the first delivery proceeds.
             try:
@@ -2439,6 +2546,32 @@ class SoroushAntiSpamBot:
             )
 
         register_private_handlers(self)
+
+        # ⏰ Watchdog: اگر ۵ دقیقه هیچ پیامی نیامد، هشدار در ترمینال —
+        # پروس زنده است ولی چیزی نمی‌بیند (اجرای همزمان دو instance
+        # با همان session، یا قطع شبکه/MTProto).
+        _last_event_at = [time.monotonic()]
+
+        async def _bot_watchdog():
+            while True:
+                await asyncio.sleep(30)
+                try:
+                    idle = time.monotonic() - _last_event_at[0]
+                    if idle >= 300:
+                        print(
+                            "⏰ BOT WATCHDOG: no incoming message for "
+                            f"{int(idle)}s — check another running bot "
+                            "instance with the same session "
+                            "(ps aux | grep python) or network"
+                        )
+                        _last_event_at[0] = time.monotonic()
+                except Exception:
+                    pass
+
+        try:
+            asyncio.create_task(_bot_watchdog(), name="bot-watchdog")
+        except Exception:
+            pass
 
         # ⛑️ حلقهٔ اصلی: مالکِ بازسازی، supervisor است (با client_factory
         # که یک SoroushClient کاملاً جدید با سشن تازه می‌سازد و self.client

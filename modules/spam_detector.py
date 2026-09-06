@@ -311,6 +311,12 @@ class SpamDetector:
             return True, reason
         if self.mention_spam_pattern.search(text):
             return True, "منشن گروهی"
+        # لایو تبلیغاتی با ایموجی صریح (مثل «لایو گذاشتم 👙🍑»)
+        if re.search(r"لایو|لایوه|\blive\b", text, re.IGNORECASE) and re.search(
+            "[\U0001F459\U0001F351\U0001FAE6\U0001F608\U0001F348\U0001F52F]",
+            text,
+        ):
+            return True, "لایو تبلیغاتی"
         return False, ""
 
     def analyze(self, text: str) -> dict:
