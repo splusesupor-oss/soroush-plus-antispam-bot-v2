@@ -2,9 +2,13 @@ import os
 import sys
 import atexit
 
-# .env باید قبل از هر import پروجه لود شود: modules/runtime_paths
-# در زمان import مقدار INSTANCE_NAME را از BOT_INSTANCE می‌سازد و اگر .env بعد از
-# ان لود شود، instance دوم همیشه main به نظر می‌رسد.
+# launcher این instance: main — BOT_INSTANCE باید قبل از هر import پروجه
+# (و قبل از لود شدن .env) قط‌ی شود: modules/runtime_paths در زمان
+# import مقدارهای INSTANCE_NAME/DATA_DIR را از حمین متگیر می‌سازد.
+os.environ.setdefault("BOT_INSTANCE", "main")
+
+# .env باید قبل از هر import پروجه لود شود (override=False معنی
+# متگیرهای محیتهای فعلی — از جمله BOT_INSTANCE بالا — بر .env برتری دارند).
 from dotenv import load_dotenv
 load_dotenv(override=False)
 
