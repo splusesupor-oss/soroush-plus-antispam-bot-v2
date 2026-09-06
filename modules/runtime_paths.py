@@ -26,6 +26,15 @@ from typing import Iterable
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+# BOT_INSTANCE می‌تواند از .env آورد بگیرد باشد‌؟ برای اطمینان از آن که این
+# ماژول هرگز پیش از لود شدن .env مقدار INSTANCE_NAME را نسازد (مشکل
+# زمان import)، اینجا خودمان .env را بدون override بارگذاری می‌کنیم.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(override=False)
+except Exception:  # pragma: no cover - dotenv همواره در دسترس است
+    pass
+
 
 def _instance_name() -> str:
     """نام instance از متغیر محیطی ``BOT_INSTANCE`` (پیش‌فرض: ``main``).

@@ -2,6 +2,12 @@ import os
 import sys
 import atexit
 
+# .env باید قبل از هر import پروجه لود شود: modules/runtime_paths
+# در زمان import مقدار INSTANCE_NAME را از BOT_INSTANCE می‌سازد و اگر .env بعد از
+# ان لود شود، instance دوم همیشه main به نظر می‌رسد.
+from dotenv import load_dotenv
+load_dotenv(override=False)
+
 from core.bot_working_split_ok import SoroushAntiSpamBot
 from modules.time_utils import TEHRAN, now_local
 import asyncio
