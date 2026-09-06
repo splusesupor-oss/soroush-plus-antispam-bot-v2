@@ -18,7 +18,6 @@ from modules.owner_private import remember_owner_peer
 from modules.group_expiry import match_command as expiry_command
 from modules.expiry_report import build_report as build_expiry_report
 from modules.admin_tools import run_cleanup_watcher
-from modules import access_profile_guard
 from handlers.group_expiry_handler import (
     run_expiry_watcher as run_group_expiry_watcher,
 )
@@ -1407,30 +1406,6 @@ class SoroushAntiSpamBot:
                     )
                 chat_id = getattr(event, "chat_id", None)
 
-                # 🔒 Profile Access Guard check in priority commands
-                # Live reason() check is the only detection source; the stored
-                # record is never re-injected as a reason and a renamed user is
-                # restored on the first clean message (see sync_block_state).
-                if sender_id and not is_global_owner(sender_id):
-                    profile_bio = next((getattr(sender, n, None) for n in ("about", "bio", "biography") if getattr(sender, n, None)), None) if sender else None
-                    guard_status, profile_reason = access_profile_guard.sync_block_state(
-                        sender, sender_id, profile_bio)
-                    if guard_status == access_profile_guard.STATUS_BLOCKED:
-                        self.logger.log_info(
-                            f"PROFILE ACCESS RESTRICTION ACTIVE user_id={sender_id} "
-                            f"name={getattr(sender, 'first_name', '')!r} reason={profile_reason!r}"
-                        )
-                        await access_profile_guard.send_restriction_notice(
-                            event, client=self.client, chat_id=chat_id)
-                        return
-                    if guard_status == access_profile_guard.STATUS_HELD:
-                        self.logger.log_info(
-                            f"PROFILE ACCESS RESTRICTION HELD user_id={sender_id} "
-                            f"reason=profile_unverifiable")
-                        return
-                    if guard_status == access_profile_guard.STATUS_RESTORED:
-                        self.logger.log_info(f"PROFILE ACCESS RESTORED user_id={sender_id}")
-
                 if chat_id is None or not is_active(chat_id):
                     _log_inactive_gate(self, chat_id, text)
                     if (
@@ -1569,8 +1544,6 @@ class SoroushAntiSpamBot:
                         f"error={_entry_error!r}"
                     )
                 raw_text = event.message.message or ""
-                # Profile access guard runs before every command/game handler.
-                profile_user = _entry_sender
                 command_priority_text = normalize_command_text(raw_text)
                 command_priority = command_priority_text in {
                     "راهنما", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها",
@@ -1591,52 +1564,6 @@ class SoroushAntiSpamBot:
                     f"text={raw_text!r} normalized={command_priority_text!r} "
                     f"priority={command_priority}"
                 )
-                profile_id = getattr(profile_user, "id", None) or getattr(event, "sender_id", None)
-                if profile_id and not is_global_owner(profile_id):
-                    profile_bio = next((getattr(profile_user, n, None) for n in ("about", "bio", "biography") if getattr(profile_user, n, None)), None) if profile_user else None
-                    # SoroushClient does not expose get_full_user; use only
-                    # fields present on the received User entity and make the
-                    # limitation explicit in runtime logs.
-                    self.debug_message_log(
-                        "PROFILE GUARD USER INFO\n"
-                        f"username={getattr(profile_user, 'username', None)!r}\n"
-                        f"name={' '.join(str(x) for x in (getattr(profile_user, 'first_name', None), getattr(profile_user, 'last_name', None)) if x)!r}\n"
-                        f"bio={profile_bio!r}"
-                    )
-                    if profile_bio is None:
-                        self.debug_message_log(
-                            "PROFILE GUARD BIO UNAVAILABLE "
-                            "reason=SoroushClient_User_entity_has_no_about_field"
-                        )
-                    # 🔒 Profile Access Guard — مسیر پیام‌های معمولی.
-                    # همان منبع واحد تصمیم‌گیری که مسیر دستورهای اولویت‌دار
-                    # و هندلر استفاده می‌کنند: فقط چک زندهٔ reason() (نام/
-                    # یوزرنیم/بیوی *فعلی*) منبع تشخیص است و رکورد ذخیره‌شده
-                    # هرگز به‌عنوان دلیل تزریق نمی‌شود. بنابراین کاربری که
-                    # نامش را اصلاح کرده، در اولین پیام بعدی رکورد کهنه‌اش
-                    # حذف (unblock) و پردازش عادی ادامه می‌یابد؛ نه اینکه
-                    # برای همیشه با همان اعلان قدیمی دوباره بلوک شود
-                    # (جزئیات: sync_block_state).
-                    guard_status, profile_reason = access_profile_guard.sync_block_state(
-                        profile_user, profile_id, profile_bio)
-                    if guard_status == access_profile_guard.STATUS_BLOCKED:
-                        self.logger.log_info(
-                            f"PROFILE ACCESS RESTRICTION ACTIVE user_id={profile_id} "
-                            f"name={getattr(profile_user, 'first_name', '')!r} reason={profile_reason!r}"
-                        )
-                        await access_profile_guard.send_restriction_notice(
-                            event, client=self.client,
-                            chat_id=getattr(event, "chat_id", None))
-                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_733' chat_id={_sd_chat} message_id={_sd_mid}")
-                        return
-                    if guard_status == access_profile_guard.STATUS_HELD:
-                        self.logger.log_info(
-                            f"PROFILE ACCESS RESTRICTION HELD user_id={profile_id} "
-                            f"reason=profile_unverifiable")
-                        self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='core_line_733' chat_id={_sd_chat} message_id={_sd_mid}")
-                        return
-                    if guard_status == access_profile_guard.STATUS_RESTORED:
-                        self.logger.log_info(f"PROFILE ACCESS RESTORED user_id={profile_id}")
                 # کاربر ممکن است «اطلاع‌رسانی» را با نیم‌فاصله (ZWNJ) بنویسد — همان
                 # املایی که خودِ ربات در پیام‌هایش به کار می‌برد. مقایسهٔ خام آن را
                 # رد می‌کرد و دستور بی‌صدا نادیده گرفته می‌شد.
