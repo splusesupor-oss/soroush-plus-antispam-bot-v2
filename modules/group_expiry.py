@@ -258,8 +258,42 @@ def set_expiry(group_id, command, title=None, now=None):
     }
 
 
+def _record_sort_moment(record):
+    """لحظهٔ مرجع برای انتخاب «جدیدترین» رکورد یک گروه.
+
+    معیار «کدام رکورد آخر ثبت شده» است، پس ابتدا ``activated_at`` (لحظهٔ
+    ثبت/تمدید) و فقط در نبودش ``expires_at``. اگر بر پایهٔ expires مقایسه
+    می‌شد، تمدید عمداً کوتاه‌ترِ مالک (مثلاً «۵ روز» روی رکورد کهنهٔ
+    ۱۴روزه) پشت رکورد قدیمی پنهان می‌ماند. رکورد بدون هیچ تاریخ معتبر،
+    قدیمی‌ترین حساب می‌شود تا هرگز رکورد معتبر را کنار نزند.
+    """
+    moment = _parse(record.get("activated_at")) or _parse(record.get("expires_at"))
+    return moment or datetime.min.replace(tzinfo=timezone.utc)
+
+
+def _canonical_records():
+    """نمای فقط-خواندنیِ نرمال‌شده: هر گروه دقیقاً یک رکورد (جدیدترین).
+
+    فایل‌های قدیمی ممکن است برای یک گروه چند کلید هم‌ارز داشته باشند
+    (کلید خام «-100...» کنار کلید نرمال). این تابع *هیچ چیزی روی دیسک
+    تغییر نمی‌دهد*؛ فقط در لحظهٔ خواندن، کلیدها را با ``_group_key``
+    یکسان می‌کند و برای هر گروه جدیدترین رکورد را برمی‌گرداند. بدون این،
+    watcher رکوردِ کهنهٔ منقضی را می‌دید و گروهِ تازه‌تمدیدشده را دوباره
+    غیرفعال می‌کرد، و «لیست انقضا» تاریخ قدیمی را نشان می‌داد.
+    """
+    canonical = {}
+    for raw_key, record in _load().items():
+        if not isinstance(record, dict):
+            continue
+        key = _group_key(raw_key)
+        current = canonical.get(key)
+        if current is None or _record_sort_moment(record) >= _record_sort_moment(current):
+            canonical[key] = record
+    return canonical
+
+
 def get_record(group_id):
-    record = _load().get(_group_key(group_id))
+    record = _canonical_records().get(_group_key(group_id))
     return dict(record) if record else None
 
 
@@ -306,14 +340,25 @@ def seconds_left(group_id, now=None):
     return max(0.0, (ends - (now or _now())).total_seconds())
 
 
+def _equivalent_keys(data, group_id):
+    """همهٔ کلیدهای موجود در فایل که به همین گروه اشاره می‌کنند.
+
+    داده‌های قدیمی ممکن است کلید خام (-100...) داشته باشند؛ عملیات
+    نوشتن باید هر دو شکل را به‌روز کند تا رکورد کهنه، تازه را نپوشاند.
+    """
+    target = _group_key(group_id)
+    return [key for key in data if _group_key(key) == target]
+
+
 def clear_expiry(group_id):
-    """رکورد انقضای یک گروه را حذف می‌کند."""
+    """رکورد انقضای یک گروه را حذف می‌کند (همهٔ شکل‌های کلید همان گروه)."""
     data = _load()
-    key = _group_key(group_id)
-    if key not in data:
+    keys = _equivalent_keys(data, group_id)
+    if not keys:
         return False
     data = dict(data)
-    del data[key]
+    for key in keys:
+        del data[key]
     _save(data)
     return True
 
@@ -324,16 +369,23 @@ def was_notified(group_id):
 
 
 def mark_notified(group_id):
-    """اعلام غیرفعال‌سازی را ثبت می‌کند تا پیام تکراری ارسال نشود."""
+    """اعلام غیرفعال‌سازی را ثبت می‌کند تا پیام تکراری ارسال نشود.
+
+    همهٔ کلیدهای هم‌ارز همان گروه علامت می‌خورند تا رکورد legacy با کلید
+    خام، دوباره در ``due_groups`` ظاهر نشود.
+    """
     data = _load()
-    key = _group_key(group_id)
-    record = data.get(key)
-    if not record or record.get("notified"):
+    keys = _equivalent_keys(data, group_id)
+    pending = [key for key in keys
+               if isinstance(data.get(key), dict)
+               and not data[key].get("notified")]
+    if not pending:
         return False
     data = dict(data)
-    updated = dict(record)
-    updated["notified"] = True
-    data[key] = updated
+    for key in pending:
+        updated = dict(data[key])
+        updated["notified"] = True
+        data[key] = updated
     _save(data)
     return True
 
@@ -346,7 +398,10 @@ def due_groups(now=None):
     """
     moment = now or _now()
     result = []
-    for key, record in _load().items():
+    # نمای نرمال‌شده: برای هر گروه فقط جدیدترین رکورد بررسی می‌شود.
+    # بدون این، رکوردِ کهنهٔ منقضی (کلید خام legacy) باعث می‌شد گروهی که
+    # همین حالا تمدید شده دوباره غیرفعال شود.
+    for key, record in _canonical_records().items():
         if record.get("notified"):
             continue
         ends = _parse(record.get("expires_at"))
@@ -356,7 +411,8 @@ def due_groups(now=None):
 
 
 def all_records():
-    return {key: dict(value) for key, value in _load().items()}
+    """نمای نرمال‌شده: هر گروه یک کلید و جدیدترین رکوردش."""
+    return {key: dict(value) for key, value in _canonical_records().items()}
 
 
 # ---------------------------------------------------------------------------
