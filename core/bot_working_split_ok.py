@@ -238,12 +238,12 @@ class SoroushAntiSpamBot:
         self.outgoing_sender = None
         self.performance_monitor = None
         self.runtime_snapshot = None
+        # 🐛 fix: مسیر state باید per-instance باشد (runtime_config_file)
+        # نه hardcode به config کنار سورس؛ وگرنه روی Termux state متغیر در
+        # حافظهٔ اشتراکی می‌ماند و جداسازی instanceها نقض می‌شود.
+        from modules.runtime_paths import runtime_config_file
         self.notice_cleanup = NoticeCleanup(
-            os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "config",
-                "notice_cleanup.json",
-            ),
+            str(runtime_config_file("notice_cleanup.json")),
             logger=self.logger,
             ttl_seconds=60,
         )
@@ -841,6 +841,54 @@ class SoroushAntiSpamBot:
 
     async def run(self):
         """اجرای ربات"""
+        # 🐛 fix: اگر شیء بدون __init__ کامل ساخته شده باشد (مسیر بازیابی
+        # بعد از کرش/ری‌بیلد یا هارنس تست)، نبودِ این attribute ها باعث
+        # AttributeError در میانهٔ راه‌اندازی می‌شد. مقداردهی دفاعی:
+        _defaults = {
+            "reply_input_peer_cache": dict,
+            "delete_notice_lock": dict,
+            "spam_lock": dict,
+            "repeat_messages": dict,
+            "flood_messages": dict,
+            "user_messages": dict,
+            "spam_burst_tasks": dict,
+            "rejoin_spam_state": dict,
+            "forward_spam_counts": dict,
+            "_temporary_state_touched": dict,
+            "_spammer_messages_touched": dict,
+            "bot_sent_messages": list,
+            "rpc_governor": lambda: None,
+            "admin_actions": lambda: None,
+            "group_actions": lambda: None,
+            "outgoing_sender": lambda: None,
+            "performance_monitor": lambda: None,
+            "runtime_snapshot": lambda: None,
+            "_temporary_state_cleanup_task": lambda: None,
+            "started_at": time.time,
+        }
+        for _name, _factory in _defaults.items():
+            if not hasattr(self, _name):
+                setattr(self, _name, _factory())
+        if not hasattr(self, "moderation_queue"):
+            self.moderation_queue = ModerationQueue(self.logger)
+        if not hasattr(self, "group_dispatcher"):
+            self.group_dispatcher = GroupDispatcher(logger=self.logger)
+        if not hasattr(self, "notice_cleanup"):
+            from modules.runtime_paths import runtime_config_file
+            self.notice_cleanup = NoticeCleanup(
+                str(runtime_config_file("notice_cleanup.json")),
+                logger=self.logger, ttl_seconds=60)
+        if not hasattr(self, "metrics_collector"):
+            from modules.observability import (
+                MetricsCollector, PeriodicHealthMonitor)
+            self.metrics_collector = MetricsCollector.get_instance(self.logger)
+            self.health_monitor = PeriodicHealthMonitor(
+                self, self.logger, interval_seconds=600.0)
+        if not hasattr(self, "process_delete"):
+            from modules.delete_queue import process_delete as _pd
+            self.process_delete = _pd
+        if not hasattr(self, "_light_game_answer_active"):
+            self._light_game_answer_active = is_game_answer_active
         # Database scans, WAL checkpoints and online backup must never run on
         # the asyncio message loop.  Integrity failure is fatal by design;
         # continuing to mutate a damaged economy would be unsafe.
@@ -2255,10 +2303,12 @@ class SoroushAntiSpamBot:
                                 self.debug_message_log(f"SPAM DEBUG EARLY RETURN reason='if not groups:' chat_id={_sd_chat} message_id={_sd_mid}")
                                 return
 
-                            import json
-
-                            with open("logs/user_map.json", "r", encoding="utf-8") as f:
-                                user_map = json.load(f)
+                            # ⚠️ مسیر باید per-instance باشد (bot2/bot3 نباید
+                            # user_map ربات main را بخوانند) — از ماژول مرکزی
+                            # user_map استفاده می‌کنیم که runtime_log_file
+                            # همان instance را باز می‌کند.
+                            from modules.user_map import load_map as _load_user_map
+                            user_map = _load_user_map()
 
                             user_id = None
 

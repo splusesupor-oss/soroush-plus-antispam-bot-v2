@@ -75,6 +75,13 @@ def simulate_restart(module=None):
         module._FALLBACK_TOKENS = itertools.count(1)
     storage._cache = None
     storage._cache_mtime = None
+    # 🐛 fix: تاریخچه‌های ضدتکرار/ضداسپم هم in-memory هستند و با ری‌استارت
+    # واقعی از بین می‌روند؛ بدون این پاکسازی، چهارمین «حدس پرچم» یکسان توسط
+    # مسیر سریع تبلیغ/تکرار (رفتار درست ضداسپم) مجازات می‌شد و تست به‌غلط
+    # fail می‌شد.
+    from modules import spam_history, message_tracker
+    spam_history.MESSAGE_HISTORY.clear()
+    message_tracker._HISTORY.clear()
 
 
 # ===========================================================================

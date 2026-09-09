@@ -44,13 +44,30 @@ def _instance_name() -> str:
     موجود دست‌نخورده بمانند؛ هر instance دیگر (``BOT_INSTANCE=bot2``)
     در مجاورت همان مسیر، دایرکتوری مستقل می‌گیرد:
     ``~/.local/share/soroush-bot-<instance>/``
+
+    اگر متغیر محیطی تنظیم نشده باشد، فایل نشانگر ``.bot_instance`` در
+    ریشهٔ همین clone خوانده می‌شود. به این ترتیب اجرای *مستقیم*
+    ``main.py`` یا ``watchdog.py`` داخل clone ربات ۲ هرگز به instance
+    ``main`` برنمی‌گردد و runtime ربات اصلی را لمس نمی‌کند.
     """
-    raw = os.environ.get("BOT_INSTANCE", "main").strip() or "main"
+    raw = os.environ.get("BOT_INSTANCE", "").strip()
+    if not raw:
+        try:
+            raw = (PROJECT_ROOT / ".bot_instance").read_text(
+                encoding="utf-8").strip()
+        except OSError:
+            raw = ""
+    raw = raw or "main"
     slug = re.sub(r"[^A-Za-z0-9._-]", "_", raw)[:32]
     return slug or "main"
 
 
 INSTANCE_NAME = _instance_name()
+
+# قطعی‌سازی instance برای پروسه‌های فرزند (watchdog → main.py و ابزارها):
+# اگر instance از فایل نشانگر آمده باشد، محیط را هم همگام می‌کنیم تا
+# فرزندها دقیقاً همین instance را به ارث ببرند.
+os.environ["BOT_INSTANCE"] = INSTANCE_NAME
 
 
 def _is_termux() -> bool:
@@ -59,10 +76,32 @@ def _is_termux() -> bool:
     return "com.termux" in prefix or "/data/data/com.termux/" in home
 
 
+def _instance_env_key() -> str:
+    return "SOROUSH_BOT_DATA_DIR_" + re.sub(
+        r"[^A-Za-z0-9]", "_", INSTANCE_NAME).upper()
+
+
 def _chosen_data_dir() -> Path:
+    # اول override اختصاصی همین instance (مثلاً SOROUSH_BOT_DATA_DIR_BOT2)
+    explicit_instance = os.environ.get(_instance_env_key(), "").strip()
+    if explicit_instance:
+        return Path(explicit_instance).expanduser().resolve()
     explicit = os.environ.get("SOROUSH_BOT_DATA_DIR", "").strip()
     if explicit:
-        return Path(explicit).expanduser().resolve()
+        base = Path(explicit).expanduser().resolve()
+        if INSTANCE_NAME != "main":
+            # ⚠️ جداسازی اجباری فقط برای حالت خطرناک: اگر override عمومی
+            # (مثلاً export شده در .profile طبق README) دقیقاً به مسیر
+            # پیش‌فرض instance اصلی اشاره کند، bot2/bot3 نباید داخل همان
+            # دایرکتوری main بنویسند؛ پسوند instance اضافه می‌شود.
+            # مسیرهای explicit دیگر (انتخاب آگاهانه اپراتور/تست) دست‌نخورده
+            # می‌مانند.
+            main_default = (
+                Path.home() / ".local" / "share" / "soroush-bot"
+            ).resolve()
+            if base == main_default:
+                return (base.parent / f"{base.name}-{INSTANCE_NAME}").resolve()
+        return base
     if _is_termux():
         if INSTANCE_NAME == "main":
             # instance اصلی مسیر تاریخی را نگه می‌دارد (مهاجرت داده لازم نیست).

@@ -58,3 +58,6 @@ config/tmp*.tmp
 config/watchdog.lock
 config/watchdog_pending.json
 logs/
+
+# Per-clone instance marker — هر clone نام instance خودش را دارد؛ commit نشود
+.bot_instance

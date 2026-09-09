@@ -114,6 +114,14 @@ class Detector:
     def check_message(self, *args, **kwargs):
         return False, None
 
+    def check_banned_words(self, *args, **kwargs):
+        # هم‌امضا با SpamDetector واقعی؛ پیش‌بررسی کلمات ممنوعه خنثی.
+        return False, None
+
+    def has_public_username(self, *args, **kwargs):
+        # هم‌امضا با SpamDetector واقعی؛ هیچ متنی یوزرنیم عمومی ندارد.
+        return False
+
 
 class Chat:
     def __init__(self, chat_id=CHAT, title="گروه تست"):

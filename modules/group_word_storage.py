@@ -2,7 +2,10 @@
 import json
 from pathlib import Path
 
-FILE = Path("config/group_banned_words.json")
+from modules.runtime_paths import runtime_config_file
+
+# per-instance: هر instance (main/bot2/bot3) فایل خودش را می‌خواند/می‌نویسد.
+FILE = Path(runtime_config_file("group_banned_words.json"))
 
 
 def load_words():

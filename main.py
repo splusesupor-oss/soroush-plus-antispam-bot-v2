@@ -2,10 +2,27 @@ import os
 import sys
 import atexit
 
-# launcher این instance: main — BOT_INSTANCE باید قبل از هر import پروجه
-# (و قبل از لود شدن .env) قط‌ی شود: modules/runtime_paths در زمان
-# import مقدارهای INSTANCE_NAME/DATA_DIR را از حمین متگیر می‌سازد.
-os.environ.setdefault("BOT_INSTANCE", "main")
+# launcher این clone — BOT_INSTANCE باید قبل از هر import پروجه
+# (و قبل از لود شدن .env) قطعی شود: modules/runtime_paths در زمان
+# import مقدارهای INSTANCE_NAME/DATA_DIR را از همین متغیر می‌سازد.
+#
+# ⚠️ این clone ممکن است instance غیر-main باشد (bot2/bot3). نام instance
+# از فایل نشانگر `.bot_instance` کنار همین فایل خوانده می‌شود تا اجرای
+# مستقیم `python3 main.py` هرگز به runtime ربات main برنگردد.
+def _default_instance():
+    marker = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          ".bot_instance")
+    try:
+        with open(marker, "r", encoding="utf-8") as fh:
+            name = fh.read().strip()
+        if name:
+            return name
+    except OSError:
+        pass
+    return "main"
+
+
+os.environ.setdefault("BOT_INSTANCE", _default_instance())
 
 # .env باید قبل از هر import پروجه لود شود (override=False معنی
 # متگیرهای محیتهای فعلی — از جمله BOT_INSTANCE بالا — بر .env برتری دارند).
@@ -28,7 +45,11 @@ def _acquire_instance_lock():
     try:
         from pathlib import Path
         from modules.runtime_paths import runtime_config_file
-        lock = Path(runtime_config_file("bot.pid"))
+        # 🐛 fix: migrate=False الزامی است — bot.pid یک فایل گذرا و
+        # per-process است؛ کپی‌شدن bot.pid کهنهٔ instance اصلی (main) به
+        # config یک instance تازه (bot2/bot3) باعث می‌شد instance جدید فکر
+        # کند پروسه‌ی دیگری قفل را دارد و بی‌دلیل خارج شود.
+        lock = Path(runtime_config_file("bot.pid", migrate=False))
     except Exception:
         return None
     pid = os.getpid()

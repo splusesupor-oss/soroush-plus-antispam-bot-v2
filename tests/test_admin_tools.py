@@ -215,8 +215,11 @@ def test_parse_time():
     check("برچسب 19 = شب", at.time_of_day(19) == "شب")
 
 
-def test_user_tracker_decrement(tmpfile):
-    tracker = UserTracker(spam_counts_file=str(tmpfile), threshold=5)
+def test_user_tracker_decrement(tmp_path):
+    # 🐛 fix: فیکسچر «tmpfile» در pytest وجود ندارد؛ fixture استاندارد
+    # tmp_path است و فایل شمارنده داخل آن ساخته می‌شود.
+    tracker = UserTracker(
+        spam_counts_file=str(tmp_path / "spam_counts.json"), threshold=5)
     tracker.reset_count(-1, 111)
     check("ابتداً صفر", tracker.get_count(-1, 111) == 0)
     tracker.increment(-1, 111)
