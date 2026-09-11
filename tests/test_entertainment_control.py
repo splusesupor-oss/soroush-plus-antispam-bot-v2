@@ -660,6 +660,84 @@ def test_group_ids_of_same_group_share_one_setting_through_handler():
 
 
 # ---------------------------------------------------------------------------
+# راهنمای ادمین‌ها: «لیست ادمینی» باید کلید سرگرمی را داخل نقل‌قول شیشه‌ای
+# نشان دهد و دو جملهٔ راهنما Bold باشند (خودِ دستور عادی).
+# ---------------------------------------------------------------------------
+HELP_BLOCK = (
+    "🎮 برای خاموش کردن بازی های عمومی\n"
+    "\n"
+    "سرگرمی خاموش\n"
+    "\n"
+    "🎮 برای روشن کردن بازی های روباه\n"
+    "\n"
+    "سرگرمی فعال"
+)
+HELP_LABELS = (
+    "🎮 برای خاموش کردن بازی های عمومی",
+    "🎮 برای روشن کردن بازی های روباه",
+)
+
+
+def _help_output(command):
+    """متن و entityهای واقعیِ پاسخ «لیست ادمینی» / «لیست کاربران»."""
+    from modules.owner_check import get_owner
+    event, _bot = _drive(command, get_owner()["user_id"])
+    for text, kwargs in event.sent:
+        if isinstance(text, str) and command == "لیست ادمینی" and "دستورات ادمین" in text:
+            return text, kwargs.get("formatting_entities") or []
+        if isinstance(text, str) and command == "لیست کاربران" and "کاربران:" in text:
+            return text, kwargs.get("formatting_entities") or []
+    raise AssertionError(f"no {command!r} reply in {event.replies!r}")
+
+
+def _spans(text, entities, kind):
+    raw = text.encode("utf-16-le")
+    out = []
+    for entity in entities:
+        if type(entity).__name__ != kind:
+            continue
+        out.append(raw[entity.offset * 2:(entity.offset + entity.length) * 2].decode("utf-16-le"))
+    return out
+
+
+def test_admin_help_contains_the_entertainment_block():
+    text, _entities = _help_output("لیست ادمینی")
+    assert HELP_BLOCK in text
+    assert text.count(HELP_BLOCK) == 1
+
+
+def test_whole_entertainment_block_is_inside_one_glass_quote():
+    text, entities = _help_output("لیست ادمینی")
+    assert HELP_BLOCK in _spans(text, entities, "MessageEntityBlockquote")
+
+
+def test_help_labels_are_bold_and_commands_are_plain():
+    text, entities = _help_output("لیست ادمینی")
+    bolds = _spans(text, entities, "MessageEntityBold")
+    for label in HELP_LABELS:
+        assert label in bolds, label
+    for command in ("سرگرمی خاموش", "سرگرمی فعال"):
+        assert command not in bolds, command
+
+
+def test_help_has_no_markdown_and_all_spans_fit():
+    text, entities = _help_output("لیست ادمینی")
+    for marker in ("*", "**", "__", "```"):
+        assert marker not in text
+    length = len(text.encode("utf-16-le")) // 2
+    assert entities
+    for entity in entities:
+        assert 0 <= entity.offset and entity.offset + entity.length <= length
+        assert _spans(text, [entity], type(entity).__name__)[0] in text
+
+
+def test_user_list_help_does_not_show_admin_commands():
+    text, _entities = _help_output("لیست کاربران")
+    assert HELP_BLOCK not in text
+    assert "👑 دستورات ادمین‌ها:" not in text
+
+
+# ---------------------------------------------------------------------------
 # اجرای مستقل (بدون pytest)
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":  # pragma: no cover
