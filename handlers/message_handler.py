@@ -135,6 +135,8 @@ from modules.outgoing_profiler import (
 )
 from handlers.admin_handler import handle_admin_commands
 from modules import admin_tools
+# 🎮 روشن/خاموش کردن بازی‌های داخلی به تفکیک گروه (storage و گارد خالص).
+from modules import entertainment_control
 from modules.group_dispatch import PRIORITY_ADMIN, classify_priority
 # 🗂 سیستم سابقه‌ها و 🏆 سطح گروه — دو قابلیتِ مستقل با فایل و ماژولِ جدا.
 from modules import user_history
@@ -2787,6 +2789,7 @@ def cleanup_expired_handler_state(bot, now=None):
 # to stand down, so the existing command handlers below remain authoritative.
 _INTERNAL_EXACT_COMMANDS = frozenset({
     "تست دکمه", "راهنما", "لیست بازی", "لیست بازی ها", "لیست بازی‌ها",
+    "سرگرمی خاموش", "سرگرمی فعال",
     "لیست کاربران", "لیست ادمین", "لیست ادمینی", "آمارم", "بیوگرافی",
     "یاد آوری", "ترجمه", "قفل", "باز", "جک", "تصحیح کلمات",
     "اسم فامیل", "حدس ایموجی", "حدس پرچم", "چهار گزینه ای", "جای خالی", "چیستان",
@@ -4563,6 +4566,42 @@ async def handle_new_message(bot, event):
                 await event.reply(result)
                 return
 
+
+        # ------------------------------------------------------------------
+        # 🎮 کنترل سرگرمی به تفکیک گروه.
+        # دو شاخهٔ «روشن/خاموش» و بعد گارد مرکزیِ بازی‌ها. هر دو **پیش از**
+        # هر مسیر بازی قرار دارند تا هیچ state، تایمر، سکه یا شمارنده‌ای در
+        # گروه خاموش ساخته نشود. «لیست بازی» گارد نمی‌شود، چون پیام
+        # فعال‌سازی خودش کاربر را به همان ارجاع می‌دهد.
+        # ------------------------------------------------------------------
+        entertainment_command = entertainment_control.normalize(clean_text)
+        if entertainment_command in entertainment_control.COMMANDS:
+            bot.logger.log_info(
+                "HANDLER CALLED handler=entertainment_control "
+                f"command={entertainment_command!r} chat_id={chat_id}"
+            )
+            if event.is_private:
+                await event.reply(entertainment_control.PRIVATE_CHAT_NOTICE)
+                return
+            if not admin_tools.has_admin_permission(
+                chat_id, user_id, getattr(sender, "username", None)
+            ):
+                await entertainment_control.send_permission_denied(event)
+                return
+            if entertainment_command == entertainment_control.COMMAND_DISABLE:
+                entertainment_control.disable(chat_id)
+                await entertainment_control.send_disabled_notice(event)
+            else:
+                entertainment_control.enable(chat_id)
+                await entertainment_control.send_enabled_notice(event)
+            return
+
+        # گارد مرکزی — هر بازی داخلی از همین یک نقطه رد می‌شود.
+        if await entertainment_control.guard(event, chat_id, clean_text):
+            bot.logger.log_info(
+                f"ENTERTAINMENT BLOCKED chat_id={chat_id} command={clean_text!r}"
+            )
+            return
 
         # ---- 📥 دانلود عکس (مستقل، قبل از بازی‌ها) ----
         if await handle_photo_download(

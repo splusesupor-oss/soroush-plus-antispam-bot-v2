@@ -39,6 +39,10 @@ from modules.fox_games.session_core import (
     normalize_text,
     to_persian_digits,
 )
+# 🎮 گارد لایهٔ دوم: اگر این روتر روزی از مسیری غیر از هندلر اصلی صدا زده
+# شود، بازیِ خاموش باز هم اجرا نمی‌شود. هیچ state یا تایمری پیش از این
+# گارد ساخته نمی‌شود.
+from modules import entertainment_control
 
 # دستورهایی که این روتر مالک آن‌هاست.
 FOX_GAME_COMMANDS = frozenset({
@@ -1186,6 +1190,10 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
     }
 
     if command in start_games:
+        # 🎮 لایهٔ دوم گارد سرگرمی — پیش از هر state، تایمر یا پرداخت سکه.
+        if await entertainment_control.guard(event, chat_id, text):
+            log(logger, f"FOX GAME BLOCKED chat_id={chat_id} command={command!r}")
+            return True
         game_module, starter = start_games[command]
         if not game_module.is_active(chat_id):
             if active_game_count(chat_id) >= MAX_ACTIVE_GAMES_PER_CHAT:
