@@ -415,6 +415,55 @@ def all_records():
     return {key: dict(value) for key, value in _canonical_records().items()}
 
 
+def update_title(group_id, title):
+    """🔄 به‌روزرسانی عنوان ذخیره‌شدهٔ رکورد انقضای یک گروه.
+
+    فقط عنوان رکوردهایی که قبلاً برای این گروه ثبت شده‌اند به‌روز می‌شود؛
+    برای گروه بدون رکورد هیچ چیزی ساخته نمی‌شود و تاریخ انقضا دست نمی‌خورد.
+    همهٔ کلیدهای هم‌ارز (شکل کوتاه و -۱۰۰...) با هم به‌روز می‌شوند تا دستور
+    «مهلت گروه» و «لیست انقضا» همیشه نام فعلی گروه را نشان دهند.
+
+    خروجی ``True`` است اگر عنوانی واقعاً تغییر کرده باشد.
+    """
+    title = str(title or "").strip()
+    if not title:
+        return False
+    data = _load()
+    keys = _equivalent_keys(data, group_id)
+    pending = [key for key in keys
+               if isinstance(data.get(key), dict)
+               and str(data[key].get("title") or "").strip() != title]
+    if not pending:
+        return False
+    data = dict(data)
+    for key in pending:
+        updated = dict(data[key])
+        updated["title"] = title
+        data[key] = updated
+    _save(data)
+    return True
+
+
+def sync_records():
+    """🧹 هم‌سان‌سازی دوره‌ای فایل انقضا با وضعیت واقعی.
+
+    فایل را به شکل «نرمال» بازنویسی می‌کند: برای هر گروه دقیقاً یک رکورد
+    (جدیدترین) با کلید یکسان نگه داشته می‌شود و کلیدهای تکراریِ legacy
+    (شکل خام -۱۰۰... کنار شکل کوتاه) که باعث می‌شدند گروهِ تازه‌تمدیدشده با
+    تاریخ کهنه دیده شود حذف می‌گردند. هیچ گروهی حذف نمی‌شود؛ گروه‌های منقضی
+    هم با همان تاریخ واقعی می‌مانند تا «لیست انقضا» وضعیت درست را نشان دهد.
+
+    این تابع فقط برای «مرتب نگه‌داشتن لیست» است؛ منقضی‌شدنِ واقعیِ گروه به آن
+    وابسته نیست و سرِ زمانِ انقضا توسط ``due_groups``/watcher و
+    ``is_expired`` انجام می‌شود. خروجی: تعداد گروه‌های نرمال‌شده.
+    """
+    data = _load()
+    canonical = {key: dict(record) for key, record in _canonical_records().items()}
+    if canonical != data:
+        _save(canonical)
+    return len(canonical)
+
+
 # ---------------------------------------------------------------------------
 # ساخت پیام تأیید همراه با entity ها
 # ---------------------------------------------------------------------------
@@ -450,3 +499,81 @@ def build_expired_message():
     """متن غیرفعال‌سازی خودکار، کاملاً Bold."""
     text = EXPIRED_MESSAGE
     return text, [("bold", 0, _u16(text))]
+
+
+# ---------------------------------------------------------------------------
+# مهلت باقی‌ماندهٔ گروه (دستور «مهلت گروه»)
+# ---------------------------------------------------------------------------
+_PERSIAN_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+# برچسب‌های پیام «مهلت گروه». فقط «گروه» و «مهلت باقی مانده» Bold می‌شوند.
+REMAINING_GROUP_LABEL = "گروه"
+REMAINING_LEFT_LABEL = "مهلت باقی مانده"
+REMAINING_RENEW_LINE = "برای تمدید اشتراک : 𝄞 @aifox_bot"
+REMAINING_EXPIRED_TEXT = "منقضی شده"
+REMAINING_NO_RECORD_TEXT = "ثبت نشده"
+
+
+def format_remaining(seconds):
+    """مدت باقی‌مانده را به «X روز و Y ساعت» (ارقام فارسی) تبدیل می‌کند."""
+    seconds = int(seconds)
+    if seconds <= 0:
+        return REMAINING_EXPIRED_TEXT
+    days, remainder = divmod(seconds, 24 * 60 * 60)
+    hours, remainder = divmod(remainder, 60 * 60)
+    minutes = remainder // 60
+    parts = []
+    if days:
+        parts.append(f"{days} روز")
+    if hours or days:
+        parts.append(f"{hours} ساعت")
+    if not days and not hours:
+        parts.append(f"{minutes} دقیقه")
+    return " و ".join(parts).translate(_PERSIAN_DIGITS)
+
+
+def remaining_status(group_id, now=None):
+    """وضعیت مهلت یک گروه بر پایهٔ تاریخ انقضای واقعی آن.
+
+    خروجی یک زوج ``(state, text)`` است:
+      • ``("active", "۳ روز و ۲ ساعت")`` وقتی هنوز مهلت مانده.
+      • ``("expired", "منقضی شده")`` وقتی مهلت تمام شده.
+      • ``(None, None)`` وقتی هیچ تاریخ انقضایی برای گروه ثبت نشده.
+    محاسبه همیشه از ``expires_at`` واقعی گروه انجام می‌شود (نه مقدار ثابت).
+    """
+    ends = expires_at(group_id)
+    if ends is None:
+        return None, None
+    seconds = int((ends - (now or _now())).total_seconds())
+    if seconds <= 0:
+        return "expired", REMAINING_EXPIRED_TEXT
+    return "active", format_remaining(seconds)
+
+
+def build_remaining_message(title, remaining_text):
+    """پیام «مهلت گروه» و span های آن.
+
+    خروجی دقیقاً به شکل:
+
+        ↻- گروه : [نام گروه]
+        مهلت باقی مانده : [مدت باقی‌مانده]
+        برای تمدید اشتراک : 𝄞 @aifox_bot
+
+    تنها «گروه» و «مهلت باقی مانده» Bold می‌شوند و هیچ نقل‌قول شیشه‌ای وجود
+    ندارد. span ها به شکل خنثی ``(kind, offset, length)`` برگردانده می‌شوند تا
+    این ماژول به splusthon وابسته نشود.
+    """
+    display_title = str(title or "").strip() or "بدون نام"
+    text = (
+        f"↻- {REMAINING_GROUP_LABEL} : {display_title}\n"
+        f"{REMAINING_LEFT_LABEL} : {remaining_text}\n"
+        f"{REMAINING_RENEW_LINE}"
+    )
+    spans = []
+    # «گروه» فقط در برچسب سطر اول (پیش از نام) Bold می‌شود.
+    group_start = text.index(f"{REMAINING_GROUP_LABEL} :")
+    spans.append(("bold", _u16(text[:group_start]), _u16(REMAINING_GROUP_LABEL)))
+    # «مهلت باقی مانده» در سطر دوم Bold می‌شود.
+    left_start = text.index(REMAINING_LEFT_LABEL)
+    spans.append(("bold", _u16(text[:left_start]), _u16(REMAINING_LEFT_LABEL)))
+    return text, spans
