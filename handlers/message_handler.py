@@ -60,6 +60,7 @@ from handlers.group_expiry_handler import (
     handle as handle_group_expiry,
 )
 from modules.expiry_report import build_group_list
+from modules import group_expiry
 from modules.name_family import (
     cancel_round as cancel_name_family_round,
     finish as finish_name_family,
@@ -124,6 +125,7 @@ from modules.admin_storage import add_admin, remove_admin, is_admin, load_admins
 from modules.banned_storage import add_banned, load_banned, save_banned, is_banned
 from modules.removed_users_reset import reset_system_removed_users
 from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
+from modules.group_storage import update_group_title
 from modules.owner_greetings import registered_owner_greeting_response
 from modules.group_id import normalize_group_id
 from modules.pinned_messages import save as save_pinned_message, get as get_pinned_message
@@ -3689,6 +3691,28 @@ async def handle_new_message(bot, event):
                 _log_username_directory_failure(bot, error)
 
         # ------------------------------------------------------------------
+        # 🔄 همگام‌سازی نام گروه با اولین پیام پس از تغییر نام.
+        #
+        # اگر اسم گروه عوض شده باشد (یا هنگام خاموشیِ ربات عوض شده و رویداد
+        # ChatAction از دست رفته باشد)، نامِ فعلی از همین پیام گرفته و در هر دو
+        # انبار ذخیره می‌شود تا «مهلت گروه» و «لیست انقضا» همیشه نام فعلی را
+        # نشان دهند. گروه با ID خودش شناسایی می‌شود، پس تغییر نام هرگز گروهِ
+        # جدید نمی‌سازد یا اشتراک را از بین نمی‌برد. نوشتن فقط وقتی نام واقعاً
+        # تغییر کرده باشد انجام می‌شود، پس مسیر داغ کند نمی‌شود.
+        # ------------------------------------------------------------------
+        if not event.is_private:
+            _current_title = str(getattr(event_chat, "title", "") or "").strip()
+            if _current_title:
+                try:
+                    update_group_title(chat_id, _current_title)
+                except Exception:
+                    pass
+                try:
+                    group_expiry.update_title(chat_id, _current_title)
+                except Exception:
+                    pass
+
+        # ------------------------------------------------------------------
         # ⏳ تاریخ انقضای گروه — پیش از هر دستور دیگری.
         #
         # مسیر این سه دستور کاملاً جداست و تطبیق دقیق است، پس هیچ
@@ -3703,6 +3727,84 @@ async def handle_new_message(bot, event):
             # یکی از سه دستور را بفرستد.
             if group_expiry_blocks(chat_id, sender):
                 return
+
+        # ------------------------------------------------------------------
+        # ⏳ «مهلت گروه» — نمایش مهلت باقی‌ماندهٔ همین گروه به مالک/ادمین.
+        #
+        # روی همان سیستم فعلی انقضا کار می‌کند (modules.group_expiry) و هیچ
+        # state تازه‌ای نمی‌سازد. گروه با ID خودش شناسایی می‌شود، پس تغییر
+        # نام باعث ایجاد گروهِ جدید یا از بین رفتن اشتراک نمی‌شود؛ نامِ فعلی
+        # گروه هم با همین پیام دریافت و ذخیره/به‌روزرسانی می‌شود.
+        # ------------------------------------------------------------------
+        if not event.is_private and clean_text == "مهلت گروه":
+            authorized = _has_group_management_permission(
+                bot, chat_id, user_id, getattr(sender, "username", None)
+            )
+            if not authorized:
+                try:
+                    authorized = await _is_native_group_admin(
+                        bot, chat_id, user_id, sender, event_chat
+                    )
+                except Exception:
+                    authorized = False
+            if not authorized:
+                # فقط مدیر یا مالک اجازهٔ این دستور را دارند؛ برای بقیه هیچ
+                # پاسخی داده نمی‌شود تا دستور برای کاربران عادی وجود نداشته باشد.
+                bot.logger.log_info(
+                    "GROUP REMAINING DENIED "
+                    f"chat_id={chat_id} user_id={user_id} reason=not_admin"
+                )
+                return
+            # نامِ فعلی گروه را از همین رویداد بگیر و در هر دو انبار (groups و
+            # group_expiry) به‌روزرسانی کن تا خروجی همیشه نام فعلی را نشان دهد.
+            current_title = str(getattr(event_chat, "title", "") or "").strip()
+            if current_title:
+                try:
+                    update_group_title(chat_id, current_title)
+                except Exception:
+                    pass
+                try:
+                    group_expiry.update_title(chat_id, current_title)
+                except Exception:
+                    pass
+            record = group_expiry.get_record(chat_id) or {}
+            title = (
+                current_title
+                or str(record.get("title") or "").strip()
+                or "بدون نام"
+            )
+            state, remaining_text = group_expiry.remaining_status(chat_id)
+            if state is None:
+                await event.reply(
+                    "ℹ️ برای این گروه تاریخ انقضایی ثبت نشده است."
+                )
+                bot.logger.log_info(
+                    f"GROUP REMAINING NO RECORD chat_id={chat_id}"
+                )
+                return
+            text_out, spans = group_expiry.build_remaining_message(
+                title, remaining_text
+            )
+            entities = []
+            for kind, offset, length in spans:
+                if kind == "bold":
+                    entities.append(
+                        MessageEntityBold(offset=offset, length=length)
+                    )
+                elif kind == "blockquote":
+                    entities.append(
+                        MessageEntityBlockquote(offset=offset, length=length)
+                    )
+            try:
+                await event.reply(text_out, formatting_entities=entities)
+                bot.logger.log_info(
+                    f"GROUP REMAINING SENT chat_id={chat_id} state={state}"
+                )
+            except Exception as error:
+                bot.logger.log_error(
+                    f"GROUP REMAINING SEND FAILED chat_id={chat_id} error={error!r}"
+                )
+            return
 
         # ------------------------------------------------------------------
         # 🔎 جستجوی گوگل گروه — فقط مدیریت ادمین یا reply مجاز به پیام ربات.
@@ -5499,6 +5601,13 @@ async def handle_new_message(bot, event):
                 "🎮 برای خاموش کردن بازی های عمومی",
                 "🎮 برای روشن کردن بازی های روباه",
             )
+            # ⏳ راهنمای «مهلت گروه» — فقط مدیر یا مالک اجازهٔ این دستور را دارد.
+            # کل بلوک هم Bold می‌شود و هم داخل یک نقل‌قول شیشه‌ای قرار می‌گیرد.
+            group_remaining_help_block = (
+                "⏳ مهلت گروه (فقط مدیر یا مالک):\n"
+                "برای دیدن مهلت باقی مانده گروه\n"
+                "بنویسید مهلت گروه"
+            )
             # متن راهنما برای همهٔ کاربران یکسان است؛ هیچ نام یا اطلاعات
             # شخصی‌ای داخل آن قرار نمی‌گیرد. دستور «شخصیت» منطق جداگانهٔ
             # خودش را دارد و فقط نامی را تحلیل می‌کند که کاربر خودش می‌نویسد.
@@ -5701,6 +5810,7 @@ async def handle_new_message(bot, event):
                 "برای حذف اخطار داده‌شده به یک کاربر\n"
                 "«روی پیام کاربر ریپلای کنید و بنویسید \"حذف اخطار\"»\n\n"
                 + entertainment_help_block + "\n\n"
+                + group_remaining_help_block + "\n\n"
                 "با سازنده ربات تماس بگیرید:\n"
                 "@osine2"
             )
@@ -5860,6 +5970,8 @@ async def handle_new_message(bot, event):
                 # 🎮 دو جملهٔ راهنما Bold می‌شوند؛ خودِ «سرگرمی خاموش/فعال»
                 # مثل بقیهٔ دستورها عادی می‌ماند تا قابل کپی کردن باشد.
                 *entertainment_help_labels,
+                # ⏳ کل بلوک «مهلت گروه» طبق خواسته کاملاً Bold است.
+                group_remaining_help_block,
             ]
             # هر تکه ممکن است چند بار در متن بیاید (مثل «حذف اسم:» که هم
             # عنوان است هم دستور)؛ فقط جایگاه‌های واقعی علامت می‌خورند.
@@ -5939,6 +6051,8 @@ async def handle_new_message(bot, event):
                 "🗑️ حذف اخطار:\nبرای حذف اخطار داده‌شده به یک کاربر\n«روی پیام کاربر ریپلای کنید و بنویسید \"حذف اخطار\"»",
                 # 🎮 کل بلوک کنترل سرگرمی — یک نقل‌قول شیشه‌ای یکپارچه.
                 entertainment_help_block,
+                # ⏳ کل بلوک «مهلت گروه» داخل یک نقل‌قول شیشه‌ای یکپارچه.
+                group_remaining_help_block,
             ]
             # بخش vip: کل متن داخل یک نقل‌قول شیشه‌ای
             vip_help_section = (

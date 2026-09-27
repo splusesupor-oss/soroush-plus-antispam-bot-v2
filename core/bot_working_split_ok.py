@@ -16,6 +16,7 @@ from modules.font_converter import make_fonts
 from modules.owner_check import get_owner, is_global_owner, normalize_username
 from modules.owner_private import remember_owner_peer
 from modules.group_expiry import match_command as expiry_command
+from modules.group_expiry import sync_records as sync_expiry_records
 from modules.expiry_report import build_report as build_expiry_report
 from modules.admin_tools import run_cleanup_watcher
 from handlers.group_expiry_handler import (
@@ -1181,6 +1182,32 @@ class SoroushAntiSpamBot:
 
         asyncio.create_task(group_expiry_loop())
 
+        # 🔄 هم‌سان‌سازی دوره‌ای «لیست انقضا» با وضعیت واقعی گروه‌ها.
+        #
+        # ⚠️ این حلقه فقط برای «مرتب نگه‌داشتن لیست انقضا» است: رکوردهای
+        # تکراریِ legacy را یکسان می‌کند تا گروه‌های تمدیدشده تاریخ جدید و
+        # گروه‌های منقضی وضعیت درست نشان دهند. منقضی‌شدنِ واقعیِ گروه به این
+        # حلقه وابسته نیست و سرِ زمانِ واقعی توسط ناظرِ بالا (هر ۲۰ ثانیه) و
+        # بلاک لحظه‌ایِ is_expired انجام می‌شود.
+        async def expiry_list_sync_loop():
+            # یک بار در آغاز اجرا تا داده‌های موجود بلافاصله مرتب شوند، سپس
+            # حداقل هر ۲۴ ساعت یک بار.
+            while True:
+                try:
+                    count = sync_expiry_records()
+                    self.logger.log_info(
+                        f"EXPIRY LIST SYNC done groups={count}"
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    self.logger.log_error(
+                        f"EXPIRY LIST SYNC FAILED error={error!r}"
+                    )
+                await asyncio.sleep(24 * 60 * 60)
+
+        asyncio.create_task(expiry_list_sync_loop())
+
         # 🧹 ناظر پاکسازی خودکار — در ساعتِ تنظیم‌شده، پیام‌های گروه را پاک می‌کند.
         if not hasattr(self, "cleanup_tasks"):
             self.cleanup_tasks = {}
@@ -1614,6 +1641,7 @@ class SoroushAntiSpamBot:
                     "ثبت مالک", "لغو مالک", "برکناری مالک",
                     "ثبت گروه", "حذف گروه",
                     "۵ روز", "یک هفته", "دو هفته", "یک ماه",
+                    "مهلت گروه", "لیست انقضا",
                 }
                 self.debug_message_log(
                     "COMMAND PRIORITY CHECK "
