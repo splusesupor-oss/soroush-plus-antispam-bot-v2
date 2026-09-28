@@ -3439,15 +3439,36 @@ async def handle_new_message(bot, event):
                             f"chat_id={chat_id} user_id={user_id} error={error!r}"
                         )
 
+                    async def delete_ad_name_messages_then_punish():
+                        # ترتیب این incident قطعی است: ابتدا تمام IDهایی که
+                        # tracker فعلی در اختیار دارد (از جمله همین پیام که
+                        # بالاتر ثبت شد) حذف می‌شوند، سپس مجازات موجود اجرا
+                        # می‌شود. API جست‌وجوی نامحدود تاریخچهٔ یک فرستنده
+                        # ندارد؛ بنابراین فقط پیام‌های نگه‌داری‌شدهٔ ۳۰ دقیقهٔ
+                        # اخیر و قابل‌حذف توسط حساب پاک می‌شوند.
+                        ids = message_tracker.spam_snapshot(
+                            chat_id, user_id, getattr(event.message, "id", None)
+                        )
+                        deleted, remaining = await cleanup_spam_messages(
+                            bot, chat_id, user_id, ids
+                        )
+                        bot.logger.log_info(
+                            "AD NAME MESSAGE CLEANUP "
+                            f"chat_id={chat_id} user_id={user_id} "
+                            f"tracked={len(ids)} deleted={deleted} "
+                            f"remaining={len(remaining)}"
+                        )
+                        return await bot.admin_actions.ban_user(
+                            chat_id, user_id, reason="نام تبلیغاتی",
+                            user=sender,
+                        )
+
                     queued = bot.moderation_queue.enqueue(
                         chat_id,
                         "ban",
                         user_id=user_id,
                         timeout_seconds=45,
-                        operation=lambda: bot.admin_actions.ban_user(
-                            chat_id, user_id, reason="نام تبلیغاتی",
-                            user=sender,
-                        ),
+                        operation=delete_ad_name_messages_then_punish,
                         on_success=ad_name_ban_succeeded,
                         on_failure=ad_name_ban_failed,
                     )

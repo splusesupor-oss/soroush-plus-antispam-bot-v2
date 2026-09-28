@@ -8,6 +8,7 @@ from modules.admin_storage import is_admin, add_admin, remove_admin
 from modules.riddles import new_riddle, check_answer, get_answer
 from modules.spam_history import get_user_history, clear_user as clear_spam_history
 from modules import message_tracker
+from modules import ad_name_detector
 from modules.group_id import normalize_group_id
 from modules.group_stats import add_message, add_deleted, add_kick, add_mute, make_report
 from modules import ConfigManager, SpamDetector, BotLogger, UserTracker, AdminActions
@@ -1338,6 +1339,63 @@ class SoroushAntiSpamBot:
 
                 user_id = user.id
                 username = getattr(user, "username", None)
+
+                # همان detector مسیر پیام، هنگام ورود هم اجرا می‌شود. مدیران و
+                # مالک مثل guard پیام مستثنا هستند. حذف IDهای در دسترس پیش از
+                # AdminActions است تا حالت انتخابی بن/سکوت آن ماژول حفظ شود.
+                ad_reason = ad_name_detector.reason(user)
+                if (ad_reason and not is_global_owner(user_id)
+                        and not is_admin(chat_id, username)):
+                    runtime_group, runtime_user = self._spam_state_key(
+                        (chat_id, user_id)
+                    )
+                    ad_key = f"{runtime_group}:{runtime_user}"
+                    if ad_key not in self.punished_users:
+                        self.punished_users.add(ad_key)
+
+                        async def clean_then_punish_join():
+                            ids = message_tracker.spam_snapshot(chat_id, user_id)
+                            deleted = 0
+                            remaining = []
+                            if ids:
+                                queue = getattr(self, "message_delete_queue", None)
+                                if queue is not None:
+                                    deleted, remaining = await queue.enqueue(
+                                        chat_id, ids
+                                    )
+                                else:
+                                    try:
+                                        await self.client.delete_messages(chat_id, ids)
+                                        deleted = len(ids)
+                                    except Exception:
+                                        remaining = ids
+                            self.logger.log_info(
+                                "AD NAME JOIN CLEANUP "
+                                f"chat_id={chat_id} user_id={user_id} "
+                                f"tracked={len(ids)} deleted={deleted} "
+                                f"remaining={len(remaining)} reason={ad_reason!r}"
+                            )
+                            return await self.admin_actions.ban_user(
+                                chat_id, user_id, reason="نام تبلیغاتی",
+                                user=user,
+                            )
+
+                        queued = self.moderation_queue.enqueue(
+                            chat_id, "ban", user_id=user_id,
+                            timeout_seconds=45,
+                            operation=clean_then_punish_join,
+                            on_failure=lambda error: self.punished_users.discard(ad_key),
+                        )
+                        if queued:
+                            self.logger.log_info(
+                                "AD NAME JOIN PUNISHMENT QUEUED "
+                                f"chat_id={chat_id} user_id={user_id} "
+                                f"reason={ad_reason!r}"
+                            )
+                        else:
+                            self.punished_users.discard(ad_key)
+                    return
+
                 runtime_group, runtime_user = self._spam_state_key((chat_id, user_id))
                 punish_key = f"{runtime_group}:{runtime_user}"
                 burst_key = (runtime_group, runtime_user)
