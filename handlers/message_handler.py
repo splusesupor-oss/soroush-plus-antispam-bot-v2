@@ -49,6 +49,12 @@ from handlers.fox_games_router import (
     any_active as fox_game_active,
     handle as handle_fox_games,
 )
+from handlers.clipboard_handler import (
+    HELP_BLOCK as CLIPBOARD_HELP_BLOCK,
+    handle_command as handle_clipboard_command,
+    handle_reply_save as handle_clipboard_reply_save,
+    is_command as is_clipboard_command,
+)
 from modules import who_knows as _who_knows
 from modules import truth_or_lie as _truth_lie
 # 📥 قابلیت مستقل «دانلود عکس».
@@ -1285,7 +1291,7 @@ def _is_management_command(text):
 # Owner-only commands authorize with is_global_owner. A native
 # get_permissions RTT (~1.7s) cannot change that decision.
 _OWNER_ONLY_NATIVE_SKIP = frozenset({
-    "فعال", "غیر فعال", "فعال سازی",
+    "فعال", "غیر فعال", "فعال سازی", "کپی بورد", "کپی",
     "ثبت گروه", "حذف گروه",
     "ثبت مالک", "لغو مالک", "برکناری مالک",
 })
@@ -2807,7 +2813,7 @@ _INTERNAL_EXACT_COMMANDS = frozenset({
     "برکناری مالک", "ثبت گروه", "حذف گروه", "حذف اخطار", "حذف اخطارها",
     "تغییر اخطار", "تغییر مجازات",
     "لاگ مدیریتی", "مین یاب", "بهترین جواب", "نبرد", "بخند یا بباز",
-    "وضعیت ربات", "پینگ ربات",
+    "وضعیت ربات", "پینگ ربات", "کپی بورد", "کپی",
     "سایت بازی", "سایت", "لینک بازی", "/game", "/site",
     "جعبه شانسی", "خون آشام", "خون‌آشام", "جرعت", "جرات", "جرئت",
     "حقیقت", "حقیقت بگو", "ربات", "روباه", "/help", "!help", "help",
@@ -3360,6 +3366,7 @@ async def handle_new_message(bot, event):
             "حدس ایموجی", "حدس جمله", "ساخت جمله", "معما", "حدس پرچم",
             "مین یاب", "سابقه ها", "سابقه‌ها", "سطح گروه",
             "فعال", "غیر فعال", "فعال سازی",
+            "کپی بورد", "کپی",
             "ثبت مالک", "لغو مالک", "برکناری مالک",
             "ثبت گروه", "حذف گروه",
             "۵ روز", "یک هفته", "دو هفته", "یک ماه",
@@ -3469,6 +3476,38 @@ async def handle_new_message(bot, event):
         # پیش‌تر این گیتِ دوم، فرمانی را که از گیت اول عبور کرده بود دوباره
         # می‌بلعید و «راهنما»/«روباه» هیچ‌وقت به handler نمی‌رسیدند.
         clean_text = normalize_command(message_text)
+
+        # 📋 کپی بورد — یک مسیر زودهنگام و مستقل.
+        # فرمان‌ها باید قبل از فیلتر اسپم/بازی/جستجو مصرف شوند و ذخیره فقط
+        # وقتی مجاز است که پیام دقیقاً روی guide message ثبت‌شده ریپلای باشد.
+        if is_clipboard_command(clean_text):
+            try:
+                if await handle_clipboard_command(
+                    bot, event, chat_id, user_id, sender, clean_text
+                ):
+                    return
+            except Exception as clipboard_error:
+                bot.logger.log_error(
+                    "CLIPBOARD COMMAND FAILED "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"error={clipboard_error!r}"
+                )
+                return
+
+        if not event.is_private:
+            try:
+                if await handle_clipboard_reply_save(
+                    bot, event, chat_id, user_id, sender, message_text
+                ):
+                    return
+            except Exception as clipboard_save_error:
+                bot.logger.log_error(
+                    "CLIPBOARD SAVE FLOW FAILED "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"error={clipboard_save_error!r}"
+                )
+                return
+
         is_session_account = user_id == getattr(bot, "bot_account_id", None)
         is_named_bot_account = sender_username in {"aifox", "osine2"}
         _self_priority, self_command_kind = classify_priority(clean_text, event)
@@ -5811,6 +5850,7 @@ async def handle_new_message(bot, event):
                 "«روی پیام کاربر ریپلای کنید و بنویسید \"حذف اخطار\"»\n\n"
                 + entertainment_help_block + "\n\n"
                 + group_remaining_help_block + "\n\n"
+                + CLIPBOARD_HELP_BLOCK + "\n\n"
                 "با سازنده ربات تماس بگیرید:\n"
                 "@osine2"
             )
@@ -5972,6 +6012,8 @@ async def handle_new_message(bot, event):
                 *entertainment_help_labels,
                 # ⏳ کل بلوک «مهلت گروه» طبق خواسته کاملاً Bold است.
                 group_remaining_help_block,
+                # 📋 کل راهنمای کپی بورد طبق خواسته Bold است.
+                CLIPBOARD_HELP_BLOCK,
             ]
             # هر تکه ممکن است چند بار در متن بیاید (مثل «حذف اسم:» که هم
             # عنوان است هم دستور)؛ فقط جایگاه‌های واقعی علامت می‌خورند.
@@ -6053,6 +6095,8 @@ async def handle_new_message(bot, event):
                 entertainment_help_block,
                 # ⏳ کل بلوک «مهلت گروه» داخل یک نقل‌قول شیشه‌ای یکپارچه.
                 group_remaining_help_block,
+                # 📋 کل بلوک کپی بورد داخل یک نقل‌قول شیشه‌ای یکپارچه.
+                CLIPBOARD_HELP_BLOCK,
             ]
             # بخش vip: کل متن داخل یک نقل‌قول شیشه‌ای
             vip_help_section = (

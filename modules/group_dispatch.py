@@ -117,6 +117,9 @@ _ADMIN_EXACT = frozenset({
     "تغییر اخطار", "تغییر مجازات",
     # دستور تشخیصی مالک باید حتی زیر بار سنگین از لاین admin برود.
     "وضعیت ربات", "پینگ ربات",
+    # Clipboard management is a protected admin lane so it never waits
+    # behind ordinary spam traffic.
+    "کپی بورد", "کپی",
 })
 
 _ADMIN_PREFIXES = (
