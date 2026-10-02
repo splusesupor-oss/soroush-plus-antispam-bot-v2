@@ -55,6 +55,11 @@ from handlers.clipboard_handler import (
     handle_reply_save as handle_clipboard_reply_save,
     is_command as is_clipboard_command,
 )
+from handlers.ad_name_filter_handler import (
+    HELP_BLOCK as AD_NAME_FILTER_HELP_BLOCK,
+    handle as handle_ad_name_filter_command,
+    is_command as is_ad_name_filter_command,
+)
 from modules import who_knows as _who_knows
 from modules import truth_or_lie as _truth_lie
 # 📥 قابلیت مستقل «دانلود عکس».
@@ -3368,14 +3373,17 @@ async def handle_new_message(bot, event):
             "فعال", "غیر فعال", "فعال سازی",
             "کپی بورد", "کپی",
             "ثبت مالک", "لغو مالک", "برکناری مالک",
+            # دستورهای فیلتر اسم باید به handler برسند تا کاربر عادی
+            # پاسخ permission بگیرد، نه اینکه guard نام روی خود فرمان عمل کند.
+            "فیلتر اسم", "حذف فیلتر اسم", "لغو اسم", "لیست فیلتر اسم",
             "ثبت گروه", "حذف گروه",
             "۵ روز", "یک هفته", "دو هفته", "یک ماه",
-        }
+        } or is_ad_name_filter_command(message_text)
         if (sender and not event.is_private and not command_priority
                 and not is_global_owner(user_id)
                 and not native_admin_warn_only):
             if not admin_tools.has_admin_permission(chat_id, user_id, sender_username):
-                ad_reason = ad_name_detector.reason(sender)
+                ad_reason = ad_name_detector.reason(sender, chat_id)
                 if ad_reason:
                     # Claim the incident before any await. A burst can produce
                     # several NewMessage events before the kick RPC completes;
@@ -3476,6 +3484,21 @@ async def handle_new_message(bot, event):
         # پیش‌تر این گیتِ دوم، فرمانی را که از گیت اول عبور کرده بود دوباره
         # می‌بلعید و «راهنما»/«روباه» هیچ‌وقت به handler نمی‌رسیدند.
         clean_text = normalize_command(message_text)
+
+        # 🏷️ فیلتر اسم — مدیریت فقط از مسیر permission فعلی ادمین‌ها.
+        if is_ad_name_filter_command(clean_text):
+            try:
+                if await handle_ad_name_filter_command(
+                    bot, event, chat_id, user_id, sender, clean_text
+                ):
+                    return
+            except Exception as name_filter_error:
+                bot.logger.log_error(
+                    "AD NAME FILTER COMMAND FAILED "
+                    f"chat_id={chat_id} user_id={user_id} "
+                    f"error={name_filter_error!r}"
+                )
+                return
 
         # 📋 کپی بورد — یک مسیر زودهنگام و مستقل.
         # فرمان‌ها باید قبل از فیلتر اسپم/بازی/جستجو مصرف شوند و ذخیره فقط
@@ -5851,6 +5874,7 @@ async def handle_new_message(bot, event):
                 + entertainment_help_block + "\n\n"
                 + group_remaining_help_block + "\n\n"
                 + CLIPBOARD_HELP_BLOCK + "\n\n"
+                + AD_NAME_FILTER_HELP_BLOCK + "\n\n"
                 "با سازنده ربات تماس بگیرید:\n"
                 "@osine2"
             )
@@ -6014,6 +6038,8 @@ async def handle_new_message(bot, event):
                 group_remaining_help_block,
                 # 📋 کل راهنمای کپی بورد طبق خواسته Bold است.
                 CLIPBOARD_HELP_BLOCK,
+                # 🏷️ کل راهنمای فیلتر اسم طبق خواسته Bold است.
+                AD_NAME_FILTER_HELP_BLOCK,
             ]
             # هر تکه ممکن است چند بار در متن بیاید (مثل «حذف اسم:» که هم
             # عنوان است هم دستور)؛ فقط جایگاه‌های واقعی علامت می‌خورند.
@@ -6097,6 +6123,8 @@ async def handle_new_message(bot, event):
                 group_remaining_help_block,
                 # 📋 کل بلوک کپی بورد داخل یک نقل‌قول شیشه‌ای یکپارچه.
                 CLIPBOARD_HELP_BLOCK,
+                # 🏷️ کل بلوک فیلتر اسم داخل یک نقل‌قول شیشه‌ای یکپارچه.
+                AD_NAME_FILTER_HELP_BLOCK,
             ]
             # بخش vip: کل متن داخل یک نقل‌قول شیشه‌ای
             vip_help_section = (
