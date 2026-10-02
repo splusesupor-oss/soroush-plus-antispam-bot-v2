@@ -159,6 +159,8 @@ def test_help_block_has_exact_lines_and_real_entity_coverage():
     )
     assert "برای فیلتر اسم یک کاربر بنویسید فیلتر اسم بعد نام را بنویسید\\n" in source
     assert "برای لغو بنویسید لغو اسم بعد اسم را بنویسید" in source
+    assert "برای دیدن لیست اسم ها" in source
+    assert "لیست فیلتر اسم" in source
     assert "AD_NAME_FILTER_HELP_BLOCK" in (
         Path(__file__).parents[1] / "handlers" / "message_handler.py"
     ).read_text(encoding="utf-8")
