@@ -100,6 +100,11 @@ def _stamp() -> str:
 def _is_excluded(path: Path) -> bool:
     if path.name in _EXCLUDED_NAMES:
         return True
+    # Stale session copies (``.env.old``, ``.env.session_backup``, …) are not
+    # needed to recover: the current ``.env`` is archived explicitly.  Leaving
+    # them out keeps one copy of the secret instead of eight.
+    if path.name.startswith(".env.") and path.name != ".env.example":
+        return True
     if path.name.endswith(_EXCLUDED_SUFFIXES):
         return True
     for part in path.parts:

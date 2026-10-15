@@ -680,6 +680,10 @@ class BackupRestoreTests(unittest.TestCase):
         self.assertTrue(any(n.endswith("bot.sqlite3") for n in names))
         self.assertTrue(any(n.startswith("source/") for n in names))
         self.assertFalse(any("/.git/" in n for n in names))
+        # Only the live .env is archived; stale session copies are not.
+        stale = [n for n in names
+                 if ".env." in n.split("/")[-1] and not n.endswith(".env.example")]
+        self.assertEqual(stale, [], f"stale .env copies archived: {stale}")
         self.assertFalse(any(n.endswith(".log") for n in names),
                          "logs must not bloat a backup")
 
