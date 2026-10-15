@@ -1,63 +1,63 @@
-# Python runtime artifacts
-__pycache__/
+# ============================================================
+#  محرمانه — هرگز نباید وارد مخزن عمومی شود
+# ============================================================
+# سشن، توکن، کلید API و نسخه‌های پشتیبان آن‌ها.
+# توجه: ignore فقط فایل‌های «track نشده» را نگه می‌دارد؛ اگر فایلی قبلاً
+# کامیت شده باشد، اول باید از فهرست خارج شود:
+#     git rm --cached .env
+.env
+.env.*
+!.env.example
+*.env
+*.session
+*.session-journal
+*.session-wal
+
+# آرشیو بکاپ کامل (شامل .env و دیتابیس) — محل نگهداری آن خصوصی است
+B2-full-*.tar.gz
+B2-backup-*.tar.gz
+B2-backup-*.tar.gz.sha256
+*bot-backup-*.tar.gz
+backups/*.tar.gz
+backups/*.zip
+
+# ============================================================
+#  داده‌ی زمان اجرا (per-instance، هرگز در مخزن)
+# ============================================================
+config/*.json
+config/*.txt
+config/archive/
+config/tmp*.tmp
+config/watchdog.lock
+config/watchdog_pending.json
+config/bot.pid
+
+# نشانگر instance
+# توجه: در همین clone عمداً یک .bot_instance با مقدار «bot2» track شده است تا
+# این کلون همیشه ربات ۲ باشد و اجرای main.py/watchdog.py اشتباهی در مسیر
+# داده‌ی ربات اصلی ننویسد. سایر کلون‌ها نشانگر خودشان را جدا نگه می‌دارند.
+.bot_instance
+
+# ============================================================
+#  لاگ و کش
+# ============================================================
+logs/
+*.log
+*.log.*
 *.pyc
 *.pyo
 *.pyd
 *.py[cod]
 *$py.class
+__pycache__/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 
-# Runtime logs and client sessions
-logs/
-*.session
-*.session-*
-
-# Runtime-persisted feature data
-config/group_memory.json
-config/group_rules.json
-config/group_message_lock_state.json
-config/name_family_learning.json
-config/fox_lucky_box.json
-
-# Economy runtime data — belongs to each device, never to the repo.
-# Tracking it made a pull try to overwrite real user balances.
-config/economy.json
-config/economy_shop.json
-config/economy_settings.json
-
-# قابلیت‌های جدید: state runtime — روی هر دستگاه جدا ساخته می‌شود
-config/fox_minesweeper.json
-config/sentence_guess_state.json
-config/group_level.json
-config/user_history.json
-
-# Runtime logs and data
-logs/
-*.log
-
-# Runtime config data
-config/*.json
-
-# Python cache
-__pycache__/
-*.pyc
-
-# Environment
-.env
-logs/
-config/notice_cleanup.json
-config/*.json
-__pycache__/
-*.pyc
-config/notice_cleanup.json
-
-# runtime files
+# ============================================================
+#  خروجی‌های موقت و ابزارها
+# ============================================================
 backups/runtime/
-config/tmp*.tmp
-config/watchdog.lock
-config/watchdog_pending.json
-logs/
-
-# Per-clone instance marker — هر clone نام instance خودش را دارد؛ commit نشود
-.bot_instance
+*.tmp
+*.bak_*
+tmp/
