@@ -153,6 +153,42 @@ def get_owner():
         return owner
 
 
+def owner_configured() -> bool:
+    """True when a real owner is configured for this deployment.
+
+    ``get_owner()`` keeps returning a dict with ``user_id=None`` for backwards
+    compatibility and fails closed, which is safe but *silent*: the bot then
+    accepts nobody as owner.  Call this at startup so the operator finds out
+    immediately instead of after the first rejected command.
+    """
+    return get_owner().get("user_id") is not None
+
+
+_OWNER_MISSING_WARNED = False
+
+
+def warn_if_owner_missing(logger=None) -> bool:
+    """Emit one loud warning when no owner is configured.  Never raises."""
+    global _OWNER_MISSING_WARNED
+    if owner_configured():
+        return False
+    if _OWNER_MISSING_WARNED:
+        return True
+    _OWNER_MISSING_WARNED = True
+    message = (
+        "CONFIG WARNING: no global owner configured — every owner-only command "
+        f"will be rejected. Create {DEPLOYMENT_FILE} with "
+        '{"user_id": <numeric id>, "username": "<username>"}'
+    )
+    _LOG.error(message)
+    if logger is not None:
+        try:
+            logger.log_notice(message)
+        except Exception:
+            pass
+    return True
+
+
 def is_global_owner(user):
     """Only the user ID currently returned by ``get_owner()`` is accepted."""
     if user is None:

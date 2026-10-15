@@ -11,9 +11,12 @@ from modules import message_tracker
 from modules.group_id import normalize_group_id
 from modules.group_stats import add_message, add_deleted, add_kick, add_mute, make_report
 from modules import ConfigManager, SpamDetector, BotLogger, UserTracker, AdminActions
+from modules import session_resolver
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
-from modules.owner_check import get_owner, is_global_owner, normalize_username
+from modules.owner_check import (
+    get_owner, is_global_owner, normalize_username, warn_if_owner_missing,
+)
 from modules.owner_private import remember_owner_peer
 from modules.group_expiry import match_command as expiry_command
 from modules.group_expiry import sync_records as sync_expiry_records
@@ -592,23 +595,28 @@ class SoroushAntiSpamBot:
         تازه از همان session string می‌سازد تا sender/state/receive loop
         همگی از صفر باشند.
         """
-        # سشن هر instance مستقل است: اگر BOT_INSTANCE ست شده باشد، اول
-        # متغیر اختصاصی آن instance (SOROUSH_SESSION_STRING_<INSTANCE>) و
-        # بعد متغیر عمومی چک می‌شود. هیچ‌وقت سشن یک instance به دیگری
-        # منتقل یا overwrite نمی‌شود.
+        # سشن هر instance مستقل است و منبع آن همیشه صریح و ماسک‌شده اعلام
+        # می‌شود. حل‌کننده در modules/session_resolver.py:
+        #   ۱) SOROUSH_SESSION_STRING_<INSTANCE>  ← مسیر درست
+        #   ۲) SOROUSH_SESSION_STRING             ← فقط با هشدار صریح
+        #   ۳) config_manager.session_string      ← آخرین راه‌حل، با هشدار
+        # اگر هیچ‌کدام معتبر نباشد، SessionMissing با پیام امن مطرح می‌شود؛
+        # هیچ سشن تصادفی/خالی/پیش‌فرضی جایگزین نمی‌شود.
         _instance_env = os.getenv("BOT_INSTANCE", "main").strip() or "main"
-        session_str = (
-            os.getenv(f"SOROUSH_SESSION_STRING_{_instance_env.upper()}")
-            or os.getenv("SOROUSH_SESSION_STRING")
-            or self.config_manager.get("session_string", "")
+        info = session_resolver.resolve(
+            _instance_env, config_getter=self.config_manager.get
         )
+        session_str = info.value
+        announcement = info.announcement()
+        if announcement:
+            try:
+                self.logger.log_notice(announcement)
+            except Exception:
+                pass
         api_id = os.getenv("API_ID") or self.config_manager.get("api_id")
         api_hash = os.getenv("API_HASH") or self.config_manager.get("api_hash")
 
-        if session_str:
-            session = StringSession(session_str)
-        else:
-            session = StringSession()
+        session = StringSession(session_str)
 
         if api_id and api_hash:
             client = SoroushClient(session, api_id, api_hash)
@@ -903,6 +911,39 @@ class SoroushAntiSpamBot:
             f"temp_removed={len(maintenance.get('temporary_removed', []))} "
             f"backups_removed={len(maintenance.get('backups_removed', []))}"
         )
+        # مالک تنظیم‌نشده «امن» ولی «خاموش» است: ربات بالا می‌آید و هیچ‌کس
+        # مالک شناخته نمی‌شود. یک هشدار روشن روی ترمینال و در لاگ می‌دهیم
+        # (بدون توقف ربات، تا دسترسی موجود از کار نیفتد).
+        try:
+            warn_if_owner_missing(self.logger)
+        except Exception:
+            pass
+
+        # Pre-flight سشن: بدون سشن معتبر، ادامه‌دادن فقط حلقهٔ ری‌استارت
+        # بی‌پایان می‌سازد. خطای روشن و ماسک‌شده می‌دهیم و با کد خروج
+        # «مرگبار» (۳) خارج می‌شویم تا Watchdog هم بی‌دلیل restart نکند.
+        # هیچ سشن تصادفی/خالی/پیش‌فرضی جایگزین نمی‌شود.
+        try:
+            session_resolver.resolve(
+                os.getenv("BOT_INSTANCE", "main").strip() or "main",
+                config_getter=self.config_manager.get,
+            )
+        except (session_resolver.SessionMissing,
+                session_resolver.SessionInvalid) as session_error:
+            self.logger.log_error(str(session_error))
+            print(f"\n⛔ {session_error}\n")
+            try:
+                from modules import runtime_paths
+                _info = runtime_paths.describe()
+                print("   instance=%s" % _info.get("instance"))
+                print("   data_dir=%s" % _info.get("data_dir"))
+                print("   راهنما: کلید SOROUSH_SESSION_STRING_%s را در .env "
+                      "همین clone ست کنید." %
+                      str(_info.get("instance", "")).upper())
+            except Exception:
+                pass
+            raise SystemExit(3)
+
         await self.initialize_client()
 
         await self.client.connect()

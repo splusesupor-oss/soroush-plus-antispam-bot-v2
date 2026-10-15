@@ -184,6 +184,27 @@ def _redact(text: str) -> str:
     return value
 
 
+#: Exit codes that mean "a human must fix the configuration"; restarting would
+#: only burn battery and spam the owner.  ``2`` = instance/isolation conflict,
+#: ``3`` = missing or unusable session.  Override with
+#: ``WATCHDOG_FATAL_EXIT_CODES`` (comma separated); set it to ``-`` to disable.
+_DEFAULT_FATAL_EXIT_CODES = "2,3"
+
+
+def _fatal_exit_codes() -> set:
+    raw = os.environ.get("WATCHDOG_FATAL_EXIT_CODES", _DEFAULT_FATAL_EXIT_CODES)
+    codes = set()
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            codes.add(int(part))
+        except ValueError:
+            continue
+    return codes
+
+
 def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
     try:
         return max(minimum, float(os.environ.get(name, str(default))))
@@ -1039,6 +1060,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 if not args.no_owner_report:
                     _fallback_owner_delivery(logger)
                 return result.returncode if result.returncode != 0 else 1
+
+            # یک خطای پیکربندی (تضاد instance یا نبود سشن) با restart حل
+            # نمی‌شود؛ فقط باتری و پیام مالک را هدر می‌دهد. پس توقف می‌کنیم و
+            # دلیل را روشن می‌نویسیم.
+            if result.returncode in _fatal_exit_codes():
+                logger.critical(
+                    "WATCHDOG FATAL EXIT code=%s — تا رفع مشکل پیکربندی "
+                    "restart انجام نمی‌شود (راهنما: b2.sh doctor)",
+                    result.returncode,
+                )
+                if not args.no_owner_report:
+                    _fallback_owner_delivery(logger)
+                return result.returncode
 
             # A normal restart delivers the pending report from the bot's own
             # connected client.  If the bot dies repeatedly before startup is
