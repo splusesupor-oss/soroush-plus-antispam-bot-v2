@@ -110,6 +110,11 @@ def test_ttl_cache_eviction_on_max_size():
     print("TTL Cache eviction test passed!")
 
 
+# در این نسخهٔ splusthon سازندهٔ ChatAdminRequiredError یک آرگومان (request)
+# می‌گیرد. برای این تست فقط *نوع* خطا مهم است، پس یک شیء ساده می‌دهیم.
+_ADMIN_REQUIRED = ChatAdminRequiredError(SimpleNamespace())
+
+
 def test_permission_circuit_breaker_lifecycle():
     cb = PermissionCircuitBreaker(default_cooldown=0.08)
     chat_id = 999
@@ -119,7 +124,7 @@ def test_permission_circuit_breaker_lifecycle():
     assert not cb.is_open(chat_id)
 
     # 2. Trip on failure -> OPEN
-    cb.record_failure(chat_id, ChatAdminRequiredError())
+    cb.record_failure(chat_id, _ADMIN_REQUIRED)
     assert cb.is_open(chat_id) is True
     assert cb.can_execute(chat_id) is False  # Blocked fast!
 
@@ -134,7 +139,7 @@ def test_permission_circuit_breaker_lifecycle():
     assert cb.can_execute(chat_id) is True
 
     # 5. Manual reset
-    cb.record_failure(chat_id, ChatAdminRequiredError())
+    cb.record_failure(chat_id, _ADMIN_REQUIRED)
     assert cb.is_open(chat_id) is True
     cb.reset(chat_id)
     assert cb.is_open(chat_id) is False

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from types import SimpleNamespace
 
@@ -154,6 +155,19 @@ def test_forty_group_mixed_send_delete_and_pings():
 
 
 def test_isolated_governor_under_held_delete():
+    # 🔒 محدودیت‌ها از محیط خوانده می‌شوند؛ خودِ تست مقدار محافظه‌کارانه را
+    # تعیین می‌کند تا نتیجه به .env همان دستگاه وابسته نباشد (روی دستگاه مالک
+    # BOT_RPC_TOTAL_LIMIT=3 است و تست با انتظار ۲ می‌شکست).
+    limits = {
+        "BOT_RPC_TOTAL_LIMIT": "2",
+        "BOT_RPC_DELETE_LIMIT": "1",
+        "BOT_RPC_SEND_LIMIT": "1",
+        "BOT_RPC_HEAVY_LIMIT": "1",
+        "BOT_RPC_NONCRITICAL_LIMIT": "2",
+    }
+    previous = {name: os.environ.get(name) for name in limits}
+    os.environ.update(limits)
+
     async def scenario():
         governor = RpcGovernor.from_environment()
         held = await governor.acquire(RpcAdmission(P1_DELETE, "delete", "DeleteMessagesRequest", "busy"))
@@ -167,7 +181,14 @@ def test_isolated_governor_under_held_delete():
         send.release()
         return wait_ms, governor.noncritical_limit, governor.total_limit
 
-    wait_ms, nc, total = asyncio.run(scenario())
+    try:
+        wait_ms, nc, total = asyncio.run(scenario())
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
     assert total == 2
     assert nc >= 2
     assert wait_ms < 50.0, wait_ms

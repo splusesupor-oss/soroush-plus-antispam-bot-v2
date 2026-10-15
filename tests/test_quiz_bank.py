@@ -21,6 +21,20 @@ import economy.storage as _storage
 _STORE_DIR = Path(_tempfile.mkdtemp())
 _storage.use_file(_STORE_DIR / "economy.json")
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolated_economy_store():
+    """پشتیبان اقتصاد را پیش از هر تست به فایل اختصاصی همین ماژول برمی‌گرداند.
+
+    انتخاب پشتیبان سراسری است و ماژول‌های دیگر سوییت هم عوضش می‌کنند
+    (use_file/use_sqlite)؛ بدون این کار تست‌های فایل‌محورِ این فایل گاهی روی
+    مسیر دیگری کار می‌کردند و با FileNotFoundError می‌شکستند.
+    """
+    _storage.use_file(_STORE_DIR / "economy.json")
+    yield
+
 import modules.multiple_choice as mc  # noqa: E402
 from modules.quiz_questions import QUESTIONS  # noqa: E402
 

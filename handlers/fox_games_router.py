@@ -697,16 +697,23 @@ async def _minesweeper_message(bot, event, chat_id, user_id, sender, text, logge
             f"{reward}\n{remaining_line}",
             [headline])
     else:
-        # طبق طراحی مشخص‌شده: پیدا کردن مین → کسر ۱۰ سکه برنز
+        # پیدا کردن مین → جریمه. متن پیام از همان منبعی می‌آید که واقعاً کسر
+        # می‌شود (coin_for همین بازی)، وگرنه پیام «برنز» می‌گفت در حالی که
+        # کد سکهٔ دیگری را کم می‌کرد.
         headline = f"🧨 حدس اشتباه بود، مین منفجر شد!"
+        penalty_coin = coin_word(minesweeper.REWARD_GAME)
+        penalty_amount = to_persian_digits(minesweeper.PENALTY)
         paid_penalty = _minesweeper_penalty(
             bot, chat_id, user_id,
             reference=f"minesweeper:penalty:{chat_id}:{result['session_id']}:{user_id}",
             logger=logger)
         if paid_penalty:
-            penalty_line = "\n🪙 ۱۰ سکه برنز از شما کم شد"
+            penalty_line = f"\n🪙 {penalty_amount} سکه {penalty_coin} از شما کم شد"
         else:
-            penalty_line = "\n۱۰ سکه برنز نداری، بعد از جمع کردن سکه‌ها ازت کسر می‌شود."
+            penalty_line = (
+                f"\n{penalty_amount} سکه {penalty_coin} نداری، "
+                "بعد از جمع کردن سکه‌ها ازت کسر می‌شود."
+            )
         await _bold_reply(
             event,
             f"{headline}\n\n{result['board']}\n\n"

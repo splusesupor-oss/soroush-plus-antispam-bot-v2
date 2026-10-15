@@ -25,6 +25,8 @@ from modules.fox_games import sentence_guess as sg
 from modules import user_history as uh
 from modules import group_level as gl
 from economy import get_balance, reset_all as reset_economy
+import economy
+from economy import rewards as economy_rewards
 
 CHAT = -100777
 
@@ -74,8 +76,20 @@ class Bot:
         self.logger = Logger()
 
 
+_LOOP = None
+
+
 def run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    """اجرای coroutine روی حلقهٔ خصوصی همین فایل تست.
+
+    ``asyncio.get_event_loop()`` در پایتون ۳٫۱۳ وقتی تست دیگری در همان worker
+    حلقه‌اش را بسته باشد RuntimeError می‌دهد؛ در اجرای کل سوییت همین باعث
+    پنج شکست بی‌ربط در این فایل می‌شد (تنها اجرا سالم بود).
+    """
+    global _LOOP
+    if _LOOP is None or _LOOP.is_closed():
+        _LOOP = asyncio.new_event_loop()
+    return _LOOP.run_until_complete(coro)
 
 
 # ---------------------------------------------------------------------------
@@ -98,25 +112,36 @@ def test_minesweeper_reward_penalty_and_quota():
     ms.reset_all(clear_quota=True)
     bot = Bot()
     u1 = User(1001, "علی", "ali")
+    # مقدار و نوع سکه از همان جدول واحد اقتصاد خوانده می‌شود؛ تست نباید عدد
+    # ثابت داشته باشد تا با تغییر موجودی/نوع سکه بی‌دلیل نشکند.
+    coin = economy_rewards.coin_for(ms.REWARD_GAME)
+    reward = economy_rewards.amount_for(ms.REWARD_GAME)
 
-    # دور ۱: برد → +۳ برنز
+    # دور ۱: برد → جایزهٔ همین بازی
     run(router.handle(bot, Event(CHAT, u1), CHAT, 1001, u1, "مین یاب", bot.logger))
     state = ms._ACTIVE.get((str(CHAT), "1001"))
     assert state is not None
-    safe = next(c for c in range(1, 10) if c != state["mine"])
+    # قرارداد فعلی ماژول: «safe» خانهٔ امن/برنده است (نام قدیمی «mine»).
     ev = Event(CHAT, u1)
-    run(router.handle(bot, ev, CHAT, 1001, u1, str(safe), bot.logger))
-    assert ev.said("سکه برنز")
-    assert get_balance(CHAT, 1001)["bronze"] == 3
+    run(router.handle(bot, ev, CHAT, 1001, u1, str(state["safe"]), bot.logger))
+    assert ev.said("جان سالم به در برد")
+    assert ev.said("سکه")
+    assert get_balance(CHAT, 1001)[coin] == reward
 
-    # دور ۲: باخت → ۲- برنز
+    # موجودی کافی تا جریمهٔ دور دوم واقعاً کسر شود (spend با کمبود موجودی
+    # خطا می‌دهد و پیام «نداری» می‌آید).
+    economy.award(CHAT, 1001, ms.PENALTY, coin, reference="test-fund-minesweeper")
+    before = get_balance(CHAT, 1001)[coin]
+
+    # دور ۲: باخت → کسر PENALTY از همان سکه، و پیام هم باید همان سکه را بگوید
     run(router.handle(bot, Event(CHAT, u1), CHAT, 1001, u1, "مین یاب", bot.logger))
     state = ms._ACTIVE.get((str(CHAT), "1001"))
-    mine = state["mine"]
+    losing_cell = next(c for c in range(1, 10) if c != state["safe"])
     ev = Event(CHAT, u1)
-    run(router.handle(bot, ev, CHAT, 1001, u1, str(mine), bot.logger))
-    assert ev.said("روی مین رفت") or ev.said("💥")
-    assert get_balance(CHAT, 1001)["bronze"] == 1
+    run(router.handle(bot, ev, CHAT, 1001, u1, str(losing_cell), bot.logger))
+    assert ev.said("مین منفجر شد")
+    assert ev.said(economy_rewards.coin_name(coin)), ev.out
+    assert get_balance(CHAT, 1001)[coin] == before - ms.PENALTY
 
     # شانس‌ها: ۲ بازی امروز → سومی مسدود
     ev = Event(CHAT, u1)
@@ -228,10 +253,15 @@ def test_user_history_format_and_24h_reset():
 # ---------------------------------------------------------------------------
 def test_group_level_calculation_and_format():
     gl.reset()
-    assert gl.level_for(0) == 1
-    assert gl.level_for(499) == 1
-    assert gl.level_for(500) == 2
-    assert gl.level_for(10 ** 9) == 15  # سقف
+    # قرارداد فعلی ماژول (نسخهٔ ۲، کلید _level_system_version در group_level):
+    # هر ۱۰۰۰ پیام = یک سطح، از صفر شمرده می‌شود و سقف ۲۰ است؛ یعنی سطح ۲۰
+    # در ۲۰۰۰۰ پیام به دست می‌آید.
+    assert gl.level_for(0) == 0
+    assert gl.level_for(999) == 0
+    assert gl.level_for(1000) == 1
+    assert gl.level_for(19999) == 19
+    assert gl.level_for(20000) == 20
+    assert gl.level_for(10 ** 9) == gl.MAX_LEVEL  # سقف
     text = gl.format_level(CHAT)
     assert "سطح فعلی" in text and "فعال‌ترین عضو" in text
     gl.reset()

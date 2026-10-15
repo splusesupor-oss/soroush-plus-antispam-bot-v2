@@ -173,8 +173,13 @@ def test_hot_path_does_not_block_event_loop():
     """در حلقهٔ رویداد — یعنی همان جایی که ربات واقعاً اجرا می‌شود —
     نوشتن روی دیسک نباید پردازش پیام را متوقف کند."""
     print("\n### 💾 مسیر داغ حلقهٔ رویداد را بلاک نمی‌کند")
+    # 🔒 مسیر ذخیره را خودِ تست قطعی می‌کند: با پشتیبان JSON، نویسندهٔ همگام
+    # واقعی «_json_write» است (نام قدیمی _write پس از بازنویسی SQLite عوض شد).
+    # بدون این خط، اگر ماژول تست دیگری در همان پروسه پشتیبان را عوض کرده باشد،
+    # این تست روی داده/مسیر دیگری کار می‌کرد.
+    _storage.use_file(_STORE_DIR / "economy.json")
     blocking = {"n": 0}
-    original = _storage._write
+    original = _storage._json_write
     main_thread = threading.get_ident()
 
     def counting(data):
@@ -184,7 +189,7 @@ def test_hot_path_does_not_block_event_loop():
         return original(data)
 
     async def scenario():
-        _storage._write = counting
+        _storage._json_write = counting
         try:
             mc.reset_all()
             blocking["n"] = 0
@@ -193,7 +198,7 @@ def test_hot_path_does_not_block_event_loop():
                 mc.answer_question(-9001, str(item["answer"]), 6000 + uid)
             await asyncio.sleep(0.05)   # فرصت به نوشتن پس‌زمینه
         finally:
-            _storage._write = original
+            _storage._json_write = original
 
     asyncio.run(scenario())
     check("۱۰ سوال کامل هیچ نوشتن بلاک‌کننده‌ای نداشت", blocking["n"] == 0,
@@ -271,6 +276,9 @@ def test_read_path_beats_snapshot_as_data_grows():
 def test_question_cost_is_flat():
     """قلب گزارش کاربر: سرعت نباید با گذشت زمان افت کند."""
     print("\n### 📊 هزینهٔ هر سوال با رشد داده ثابت می‌ماند")
+    # 🔒 همان دلیل تست مسیر داغ: مسیر ذخیره را خودِ تست تعیین می‌کند تا
+    # اندازه‌گیری روی فایل همین تست انجام شود.
+    _storage.use_file(_STORE_DIR / "economy.json")
     mc.reset_all()
     samples = []
     uid = 7000
@@ -281,7 +289,8 @@ def test_question_cost_is_flat():
                     progress.mark_seen(-9600 - grow * 10 - chat, user,
                                        "emoji", stage)
         _storage.flush()
-        size = (_STORE_DIR / "economy.json").stat().st_size / 1024
+        store_file = _STORE_DIR / "economy.json"
+        size = store_file.stat().st_size / 1024 if store_file.exists() else 0.0
 
         async def burst(start_uid):
             local = start_uid

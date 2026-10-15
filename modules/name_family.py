@@ -714,6 +714,14 @@ def reset_all():
     _ACTIVE.clear()
     _FINISHED_ROUNDS.clear()
     _REMAINING_LETTERS.clear()
+    # شمارندهٔ دور هم صفر می‌شود؛ در غیر این صورت شناسه‌های دورِ ساختگیِ تست‌ها
+    # (که بدون start() ساخته می‌شوند) با شناسه‌های واقعی بعدی برخورد می‌کنند و
+    # finish() بی‌دلیل «already_finished» می‌شود.
+    global _ROUND_SEQUENCE
+    _ROUND_SEQUENCE = 0
+    # کشِ اعتبارسنجیِ بیرونی هم پاک می‌شود: نتیجهٔ یک پاسخ در آن کش می‌ماند و
+    # می‌توانست نتیجهٔ اجرای بعدی را (مثلاً در تست‌های پیاپی) تغییر دهد.
+    _EXTERNAL_CACHE.clear()
 
 
 async def run_round(chat_id, round_id, on_results, logger=None, seconds=None):

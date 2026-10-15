@@ -16,7 +16,9 @@
 ``economy`` انجام می‌دهد. مقدارها از همین‌جا خوانده می‌شوند:
 
     برد  → ``REWARD_GAME`` («minesweeper» در ``economy/rewards.py``)
-    باخت → ``PENALTY`` سکهٔ برنز کسر می‌شود.
+    باخت → ``PENALTY`` سکه از *همان نوع سکهٔ این بازی* کسر می‌شود
+    (``economy.rewards.coin_for(REWARD_GAME)``) — متن پیام جریمه هم از
+    همان منبع خوانده می‌شود تا پیام و کسر واقعی هم‌خوان باشند.
 """
 import asyncio
 import json

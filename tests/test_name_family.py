@@ -5,22 +5,84 @@ import modules.name_family as game
 
 class NameFamilyValidationTests(unittest.TestCase):
     def setUp(self):
-        self.original_add = game.add
+        # 🐛 این تست‌ها قبلاً ``game.add`` را patch می‌کردند؛ آن تابع دیگر وجود
+        # ندارد. در طراحی فعلی ماژول «پرداخت» نمی‌کند: امتیاز هر بازیکن را در
+        # حالت دور ذخیره می‌کند و پرداخت سکه توسط هندلر از API اقتصاد انجام
+        # می‌شود (به کامنت ابتدای modules/name_family.py نگاه کنید).
+        # بنابراین ``self.awards`` همان امتیازی را ثبت می‌کند که ماژول واقعاً
+        # در حالت دور نوشته است؛ هیچ رفتار ساختگی‌ای اضافه نشده.
         self.original_learning = game.record_learning
+        self._real_submit = game.submit
         self.awards = []
         self.learning = []
-        game.add = lambda chat_id, user_id, name, points: self.awards.append(
-            (chat_id, user_id, points)
-        )
+
+        def recording_submit(chat_id, user_id, name, text, *args, **kwargs):
+            result = self._real_submit(
+                chat_id, user_id, name, text, *args, **kwargs)
+            entry = ((game._ACTIVE.get(chat_id) or {}).get("answers")
+                     or {}).get(str(user_id))
+            if result is not None and entry is not None:
+                self.awards.append((chat_id, user_id, entry.get("points")))
+            return result
+
+        game.submit = recording_submit
         game.record_learning = lambda *args, **kwargs: (
             self.learning.append((args, kwargs)) or {"status": "learning"}
         )
-        game._ACTIVE.clear()
+        # 🌐 مسیر تأیید بیرونی (ویکی‌داده/ویکی‌پدیا) درخواست شبکه می‌زند؛ در
+        # تست به‌طور پیش‌فرض خاموش می‌شود تا نتیجه به اینترنت وابسته نباشد
+        # (پیش‌تر همین باعث امتیازهای شناور ۵۰/۶۰ و شکست‌های تصادفی می‌شد).
+        # تستِ مخصوص این مسیر خودش با stub آن را می‌سنجد.
+        self._real_external = game._external_confirms_category
+        game._external_confirms_category = lambda *args, **kwargs: None
+        # 🐛 reset_all() خودِ ماژول: بدون آن، _FINISHED_ROUNDS بین تست‌ها باقی
+        # می‌ماند و شناسه‌های دورِ واقعی با شناسه‌های ساختگی برخورد می‌کردند
+        # (finish() بی‌دلیل «already_finished» می‌شد و _ACTIVE پاک نمی‌شد).
+        game.reset_all()
 
     def tearDown(self):
-        game.add = self.original_add
+        game.submit = self._real_submit
         game.record_learning = self.original_learning
-        game._ACTIVE.clear()
+        game._external_confirms_category = self._real_external
+        game.reset_all()
+
+    def test_external_confirmation_uses_stubbed_source_without_network(self):
+        """مسیر «تأیید بیرونی» بدون شبکه ولی با منطق واقعی سنجیده می‌شود.
+
+        در تولید، این مسیر از ویکی‌داده/ویکی‌پدیا پاسخ می‌گیرد؛ اینجا فقط
+        خودِ تابع شبکه با یک stub جایگزین شده تا تست آفلاین و قطعی بماند.
+        انتظار: ۱۰ امتیاز و ثبت منبع در لاگ دسته‌بندی.
+        """
+        game._external_confirms_category = lambda *args, **kwargs: "wikidata"
+
+        class Logger:
+            def __init__(self):
+                self.lines = []
+
+            def log_info(self, line):
+                self.lines.append(line)
+
+        logger = Logger()
+        game._ACTIVE[100] = {"round_id": 1, "letter": "پ", "answers": {}}
+        answers = "\n".join((
+            "پپپپپ", "نمیدونم", "نمیدونم", "نمیدونم", "نمیدونم", "نمیدونم", "نمیدونم",
+        ))
+        self.assertEqual(game.submit(100, 7, "کاربر", answers, logger=logger), 10)
+        lines = self.category_lines(logger)
+        self.assertIn("category=نام", lines[0])
+        self.assertIn("score=10", lines[0])
+        self.assertIn("source=wikidata", lines[0])
+
+    @staticmethod
+    def category_lines(logger):
+        """فقط خطوط دسته‌بندی (هفت‌تا) را برمی‌گرداند.
+
+        ماژول در هر submit خطوط دیگری هم می‌نویسد (ENTER، BATCH، SCORE،
+        STORE). تست‌ها به ترتیبِ همان هفت خط دسته‌بندی کار دارند، نه به حجم
+        کل لاگ؛ پس به‌جای شمارهٔ خط ثابت، بر اساس محتوا فیلتر می‌کنیم.
+        """
+        return [line for line in logger.lines
+                if "category=" in line and "raw_answer=" in line]
 
     @staticmethod
     def valid_answers():
@@ -85,14 +147,15 @@ class NameFamilyValidationTests(unittest.TestCase):
         logger = Logger()
         game._ACTIVE[100] = {"round_id": 1, "letter": "پ", "answers": {}}
         self.assertEqual(game.submit(100, 7, "کاربر", "\n".join(first), logger=logger), 60)
-        self.assertEqual(len(logger.lines), 7)
+        lines = self.category_lines(logger)
+        self.assertEqual(len(lines), 7)
         self.assertIn(
             "category=نام raw_answer=پریا normalized_answer=پریا letter=پ source=database reason=database_match valid=True score=10",
-            logger.lines[0],
+            lines[0],
         )
         self.assertIn(
             "category=خواننده raw_answer=نمیدونم normalized_answer=نمیدونم letter=پ source=none reason=invalid valid=False score=0",
-            logger.lines[6],
+            lines[6],
         )
 
         game._ACTIVE[100] = {"round_id": 2, "letter": "پ", "answers": {}}
@@ -149,10 +212,11 @@ class NameFamilyValidationTests(unittest.TestCase):
             "ظاتمه", "ظفري", "نمی‌دونم", "نمی دانم", "ظرف", "نمیدونم", "نمی‌دونم",
         ))
         self.assertEqual(game.submit(100, 7, "کاربر", answers, logger=logger), 20)
-        self.assertIn("category=نام raw_answer=ظاتمه normalized_answer=ظاتمه letter=ظ source=learning reason=insufficient_confidence valid=False score=0", logger.lines[0])
-        self.assertIn("category=فامیل raw_answer=ظفري normalized_answer=ظفری letter=ظ source=database reason=database_match valid=True score=10", logger.lines[1])
-        self.assertIn("category=وسیله raw_answer=ظرف normalized_answer=ظرف letter=ظ source=database reason=database_match valid=True score=10", logger.lines[4])
-        self.assertEqual(len(logger.lines), 7)
+        lines = self.category_lines(logger)
+        self.assertIn("category=نام raw_answer=ظاتمه normalized_answer=ظاتمه letter=ظ source=learning reason=insufficient_confidence valid=False score=0", lines[0])
+        self.assertIn("category=فامیل raw_answer=ظفري normalized_answer=ظفری letter=ظ source=database reason=database_match valid=True score=10", lines[1])
+        self.assertIn("category=وسیله raw_answer=ظرف normalized_answer=ظرف letter=ظ source=database reason=database_match valid=True score=10", lines[4])
+        self.assertEqual(len(lines), 7)
 
     def test_persian_normalization_and_empty_variants(self):
         self.assertEqual(game._normalize("  نمی‌دونم  "), "نمیدونم")
@@ -200,11 +264,12 @@ class NameFamilyValidationTests(unittest.TestCase):
             "وحید", "وحیدی", "ورامین", "نمی‌دونم", "وینچستر", "نمی‌دونم", "وحید",
         ))
         self.assertEqual(game.submit(100, 7, "کاربر", answers, logger=logger), 30)
-        self.assertIn("category=نام raw_answer=وحید normalized_answer=وحید letter=و source=database reason=database_match valid=True score=10", logger.lines[0])
-        self.assertIn("category=فامیل raw_answer=وحیدی normalized_answer=وحیدی letter=و source=database reason=database_match valid=True score=10", logger.lines[1])
-        self.assertIn("category=شهر raw_answer=ورامین normalized_answer=ورامین letter=و source=database reason=database_match valid=True score=10", logger.lines[2])
-        self.assertIn("category=میوه raw_answer=نمی‌دونم normalized_answer=نمیدونم letter=و source=none reason=invalid valid=False score=0", logger.lines[3])
-        self.assertEqual(len(logger.lines), 7)
+        lines = self.category_lines(logger)
+        self.assertIn("category=نام raw_answer=وحید normalized_answer=وحید letter=و source=database reason=database_match valid=True score=10", lines[0])
+        self.assertIn("category=فامیل raw_answer=وحیدی normalized_answer=وحیدی letter=و source=database reason=database_match valid=True score=10", lines[1])
+        self.assertIn("category=شهر raw_answer=ورامین normalized_answer=ورامین letter=و source=database reason=database_match valid=True score=10", lines[2])
+        self.assertIn("category=میوه raw_answer=نمی‌دونم normalized_answer=نمیدونم letter=و source=none reason=invalid valid=False score=0", lines[3])
+        self.assertEqual(len(lines), 7)
 
     def test_unknown_answer_is_pending_and_defaults_to_zero(self):
         class Logger:
@@ -222,7 +287,8 @@ class NameFamilyValidationTests(unittest.TestCase):
         self.assertEqual(game.submit(100, 7, "کاربر", answers, logger=logger), 60)
         self.assertEqual(len(self.learning), 1)
         self.assertEqual(self.learning[0][0][0:4], ("شهر", "ن", "نیکشهر", "نیکشهر"))
-        self.assertIn("source=learning reason=insufficient_confidence valid=False score=0", logger.lines[2])
+        lines = self.category_lines(logger)
+        self.assertIn("source=learning reason=insufficient_confidence valid=False score=0", lines[2])
 
     def test_unknown_answer_never_scores_before_learning(self):
         game._ACTIVE[100] = {"round_id": 1, "letter": "ن", "answers": {}}
@@ -256,7 +322,20 @@ class NameFamilyValidationTests(unittest.TestCase):
             for category, answer in zip(game.CATEGORIES, self.valid_answers().splitlines())
         )
         self.assertIsNone(game._parse_answers(labelled))
-        self.assertIsNone(game._parse_answers(self.valid_answers() + "\n"))
+        # رفتار مستندشدهٔ فعلی (به docstring ماژول نگاه کنید): خط خالی و
+        # newline پایانی «تحمل» می‌شوند، چون کیبورد موبایل مرتب آن‌ها را
+        # اضافه می‌کند و ردکردن‌شان پاسخ‌های معتبر را بی‌صدا حذف می‌کرد.
+        self.assertEqual(
+            game._parse_answers(self.valid_answers() + "\n"),
+            self.valid_answers().splitlines(),
+        )
+        self.assertEqual(
+            game._parse_answers(self.valid_answers().replace("\n", "\n\n")),
+            self.valid_answers().splitlines(),
+        )
+        # ولی هشت پاسخِ واقعی رد می‌شود: قرارداد «هفت پاسخ» تغییر نکرده.
+        self.assertIsNone(
+            game._parse_answers(self.valid_answers() + "\nهشتم"))
 
     def test_unrelated_messages_do_not_create_a_submission(self):
         self.force_round(1)

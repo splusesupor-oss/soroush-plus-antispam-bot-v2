@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from modules.runtime_paths import (
+    INSTANCE_NAME,
     USING_PRIVATE_DATA_DIR,
     runtime_backup_file,
     runtime_db_file,
@@ -246,7 +247,9 @@ def maintenance(*, activity_retention_days=None):
 def backup_to(path=None):
     """Create, verify, and atomically publish a consistent online backup."""
     target = Path(path) if path else runtime_backup_file(
-        "bot-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".sqlite3"
+        # شناسهٔ instance داخل نام فایل می‌آید تا مبدأ بکاپ‌های جابه‌جاشده روشن باشد.
+        f"bot-{INSTANCE_NAME}-"
+        + datetime.now().strftime("%Y%m%d-%H%M%S") + ".sqlite3"
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name("." + target.name + ".tmp")

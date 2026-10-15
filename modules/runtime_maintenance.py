@@ -7,12 +7,20 @@ from pathlib import Path
 
 from economy import storage as economy_storage
 from modules import runtime_db
-from modules.runtime_paths import BACKUP_DIR, cleanup_stale_temp_files
+from modules.runtime_paths import (
+    BACKUP_DIR,
+    INSTANCE_NAME,
+    cleanup_stale_temp_files,
+)
 
 BACKUP_INTERVAL_SECONDS = int(
     os.environ.get("BOT_BACKUP_INTERVAL_SECONDS", str(24 * 60 * 60))
 )
 BACKUP_KEEP = int(os.environ.get("BOT_BACKUP_KEEP", "14"))
+# هیچ بکاپی که از این مدت تازه‌تر است حذف نمی‌شود (ضدِ اشتباه‌تنظیمیِ keep).
+BACKUP_MIN_AGE_SECONDS = int(
+    os.environ.get("BOT_BACKUP_MIN_AGE_SECONDS", str(60 * 60))
+)
 ECONOMY_ARCHIVE_DAYS = int(os.environ.get("BOT_ECONOMY_ARCHIVE_DAYS", "365"))
 _BACKUP_META_KEY = "runtime_last_verified_backup"
 
@@ -31,7 +39,8 @@ def _prune_backups(keep=None):
     """Apply a hard file-count cap only to routine backups.
 
     Pre-migration/rollback backups use other prefixes and are deliberately
-    never removed here.
+    never removed here. A candidate is removed only when it is both beyond the
+    count cap *and* older than ``BACKUP_MIN_AGE_SECONDS``.
     """
     keep = max(1, int(BACKUP_KEEP if keep is None else keep))
     candidates = sorted(
@@ -39,9 +48,14 @@ def _prune_backups(keep=None):
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
+    cutoff = time.time() - max(0, BACKUP_MIN_AGE_SECONDS)
     removed = []
     for path in candidates[keep:]:
         try:
+            # فقط بکاپی که هم از سقف تعداد گذشته و هم کهنه است حذف می‌شود؛
+            # یک بکاپ تازه‌ساخته هرگز به‌خاطر keep اشتباه پاک نمی‌شود.
+            if path.stat().st_mtime > cutoff:
+                continue
             path.unlink()
             removed.append(str(path))
         except OSError:

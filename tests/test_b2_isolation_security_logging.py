@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 import tarfile
+import tempfile
 import textwrap
 import time
 import unittest
@@ -794,6 +795,71 @@ class BackupRestoreTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+class AutomaticMaintenanceBackupTests(unittest.TestCase):
+    """Hardening of the routine (automatic) database snapshot.
+
+    ``modules.runtime_maintenance`` already snapshots the runtime/economy
+    database every ``BOT_BACKUP_INTERVAL_SECONDS`` and verifies the copy with
+    ``PRAGMA integrity_check`` before publishing it. Two properties are pinned
+    here because the full backup tool also guarantees them: the file name says
+    which instance produced it, and a freshly written snapshot is never rotated
+    away by the count cap.
+    """
+
+    def _run_in_temp_data_dir(self, code: str, directory: str):
+        return _run_python(
+            code, "bot2", {"SOROUSH_BOT_DATA_DIR_BOT2": directory},
+        )
+
+    def test_automatic_snapshot_is_verified_and_named_after_its_instance(self):
+        code = """
+            from modules import runtime_db
+            from modules.runtime_paths import INSTANCE_NAME
+            path = runtime_db.backup_to()
+            print(INSTANCE_NAME, path.name, path.exists(),
+                  path.stat().st_size > 0, oct(path.stat().st_mode & 0o777))
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run_in_temp_data_dir(code, tmp)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        instance, name, exists, nonempty, mode = result.stdout.split()
+        self.assertEqual(instance, "bot2")
+        self.assertTrue(name.startswith("bot-bot2-"), name)
+        self.assertTrue(name.endswith(".sqlite3"), name)
+        self.assertEqual((exists, nonempty), ("True", "True"))
+        self.assertEqual(mode, "0o600", "backup must not be world readable")
+
+    def test_count_cap_never_rotates_away_a_fresh_snapshot(self):
+        code = """
+            import json, os, time
+            from pathlib import Path
+            from modules import runtime_maintenance as maintenance
+            from modules.runtime_paths import BACKUP_DIR, ensure_layout
+            ensure_layout()
+            now = time.time()
+            fresh = ["bot-bot2-20261015-000001.sqlite3",
+                     "bot-bot2-20261015-000002.sqlite3"]
+            old = "bot-bot2-20200101-000000.sqlite3"
+            for name in fresh + [old]:
+                (BACKUP_DIR / name).write_bytes(b"snapshot")
+            for name in fresh:                      # two same-second snapshots
+                os.utime(BACKUP_DIR / name, (now, now))
+            os.utime(BACKUP_DIR / old, (now - 7200, now - 7200))
+            removed = [Path(item).name for item in maintenance._prune_backups(keep=1)]
+            alive = sorted(path.name
+                           for path in BACKUP_DIR.glob("bot-bot2-*.sqlite3"))
+            print(json.dumps({"removed": removed, "alive": alive}))
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._run_in_temp_data_dir(code, tmp)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout.splitlines()[-1])
+        # فقط فایل کهنه حذف می‌شود؛ بکاپ تازه حتی وقتی از سقف تعداد بگذرد می‌ماند.
+        self.assertEqual(payload["removed"], ["bot-bot2-20200101-000000.sqlite3"])
+        self.assertIn("bot-bot2-20261015-000001.sqlite3", payload["alive"])
+        self.assertIn("bot-bot2-20261015-000002.sqlite3", payload["alive"])
+
+
 class ConcurrencyTests(unittest.TestCase):
     """Requirement 11 — two instances of B2 must not run at once."""
 

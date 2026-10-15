@@ -29,6 +29,7 @@ from pathlib import Path
 
 from modules.atomic_write import write_json as atomic_write_json
 from modules.runtime_paths import (
+    INSTANCE_NAME,
     USING_PRIVATE_DATA_DIR,
     runtime_backup_file,
     runtime_config_file,
@@ -884,8 +885,10 @@ def export_json(path=None):
 def backup_to(path=None):
     """Create a consistent online backup. Returns the backup path."""
     target = Path(path) if path else runtime_backup_file(
-        "bot-" + datetime.now().strftime("%Y%m%d-%H%M%S") +
-        (".sqlite3" if _BACKEND == "sqlite" else ".json")
+        # شناسهٔ instance داخل نام می‌آید تا مبدأ فایل‌های بکاپ جابه‌جاشده روشن باشد.
+        f"bot-{INSTANCE_NAME}-"
+        + datetime.now().strftime("%Y%m%d-%H%M%S")
+        + (".sqlite3" if _BACKEND == "sqlite" else ".json")
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     with _LOCK:

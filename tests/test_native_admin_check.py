@@ -471,6 +471,20 @@ def test_ban_execution_and_admin_check_logs_are_debug_only():
     )
 
 
+class HashableTask(SimpleNamespace):
+    """جایگزین asyncio.Task در تست.
+
+    ``SimpleNamespace`` قابل درج در ``set`` نیست (unhashable است) ولی خودِ
+    هندلر تسک‌های زنده را داخل ``set`` می‌ریزد؛ پس این کلاس فقط ``__hash__``
+    واقعی می‌گیرد تا مثل تسک واقعی رفتار کند.
+    """
+
+    __hash__ = object.__hash__
+
+    def cancel(self):
+        return None
+
+
 def test_cleanup_expired_handler_state_sweeps_ttl_maps():
     print("\\n### جاروی TTL هندلر نقشه‌های منقضی را بدون سقف پاک می‌کند")
     handler.ADMIN_PERMISSION_CACHE.clear()
@@ -492,8 +506,8 @@ def test_cleanup_expired_handler_state_sweeps_ttl_maps():
             ("g1", 2): {"ids": {2}, "is_forward": False, "expires": 70.0},
         },
         group_timer_tasks={
-            11: {SimpleNamespace(done=lambda: True)},
-            12: {SimpleNamespace(done=lambda: False)},
+            11: {HashableTask(done=lambda: True)},
+            12: {HashableTask(done=lambda: False)},
         },
         _spam_cleanup_incidents={
             ("g", "orphan"): {

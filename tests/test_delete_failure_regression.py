@@ -241,6 +241,20 @@ def test_notice_cleanup_persists_unresolved_then_succeeds_on_retry(tmp_path):
     assert json.loads(path.read_text(encoding="utf-8")) == {}
 
 
+async def _wait_until(predicate, *, timeout=2.0, interval=0.01):
+    """انتظار تا برقرار شدن یک شرط، به‌جای خواب ثابت.
+
+    دو تست زیر پنجرهٔ زمانی کوچکی داشتند (۰٫۰۶ ثانیه) و در اجرای موازی کل
+    سوییت به‌خاطر بار CPU به‌صورت تصادفی می‌شکستند.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(interval)
+    return bool(predicate())
+
+
 def test_notice_cleanup_keeps_inflight_ids_persisted_until_rpc_finishes(tmp_path):
     class Queue:
         def __init__(self):
@@ -259,8 +273,18 @@ def test_notice_cleanup_keeps_inflight_ids_persisted_until_rpc_finishes(tmp_path
         )
         cleaner.start()
         cleaner.schedule(-14, 801)
-        await asyncio.wait_for(queue.started.wait(), timeout=0.2)
-        # The worker is awaiting the unresolved RPC at this point.
+        await asyncio.wait_for(queue.started.wait(), timeout=2.0)
+
+        # The worker is awaiting the unresolved RPC at this point: the ID must
+        # already be on disk. شرط را می‌سنجیم نه اینکه به زمان اطمینان کنیم.
+        def persisted():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return False
+            return bool(data.get("-14"))
+
+        assert await _wait_until(persisted), "شناسه روی دیسک ثبت نشد"
         on_disk = json.loads(path.read_text(encoding="utf-8"))
         cleaner.stop()
         await asyncio.sleep(0)
@@ -269,11 +293,18 @@ def test_notice_cleanup_keeps_inflight_ids_persisted_until_rpc_finishes(tmp_path
     path = tmp_path / "inflight-notice.json"
     payload = asyncio.run(run(path))
     assert payload["-14"][0]["message_id"] == 801
+
+    # 🔁 ری‌استارت عمداً این شناسه‌ها را بازپخش نمی‌کند: کامیت 66f053d
+    # («جلوگیری از طوفان RPC هنگام استارت») بارگذاری را از «بازیابی» به «دور
+    # ریختن» تغییر داد، چون حذف‌های کهنه پس از قطع/وصل روی پیام‌های نامعتبر
+    # اجرا می‌شدند و استارت ربات را عقب می‌انداختند. پس فایل کهنه دور ریخته
+    # می‌شود و هیچ شناسه‌ای به ارث نمی‌رسد.
     reloaded = NoticeCleanup(str(path), ttl_seconds=1)
-    assert reloaded.pending(-14)[0]["message_id"] == 801
+    assert reloaded.pending(-14) == []
+    assert not path.exists(), "فایل کهنهٔ notice باید هنگام بارگذاری دور ریخته شود"
 
 
-def test_notice_cleanup_retry_count_survives_restart(tmp_path):
+def test_notice_cleanup_retry_rows_are_recorded_but_not_replayed(tmp_path):
     class Queue:
         def __init__(self):
             self.calls = 0
@@ -292,16 +323,47 @@ def test_notice_cleanup_retry_count_survives_restart(tmp_path):
         )
         cleaner.start()
         cleaner.schedule(-12, 601)
-        await asyncio.sleep(0.06)
+
+        def retry_row_persisted():
+            rows = cleaner.pending(-12)
+            return bool(rows) and int(rows[0].get("attempts", 0)) == 1
+
+        assert await _wait_until(retry_row_persisted), "ردیف تلاش دوباره ثبت نشد"
         cleaner.stop()
         return queue.calls
 
     path = tmp_path / "persisted-notice.json"
     assert asyncio.run(run(path)) == 1
-    reloaded = NoticeCleanup(str(path), ttl_seconds=1)
-    rows = reloaded.pending(-12)
-    assert len(rows) == 1 and rows[0]["message_id"] == 601
-    assert rows[0]["attempts"] == 1
+
+    # در همان پروسه، ردیفِ تلاش دوباره با شمارندهٔ درست روی دیسک ثبت شده است…
+    stored = json.loads(path.read_text(encoding="utf-8"))
+    assert stored["-12"][0]["message_id"] == 601
+    assert stored["-12"][0]["attempts"] == 1
+
+    # …ولی ری‌استارت آن را بازپخش نمی‌کند (منطق عمدی کامیت 66f053d). این
+    # تست خودِ خاصیت مهم را می‌سنجد: هیچ RPC کهنه‌ای هنگام استارت زده نشود.
+    class CountingQueue:
+        def __init__(self):
+            self.calls = 0
+
+        def enqueue(self, _chat_id, ids, *, priority=1, rpc_peer=None):
+            self.calls += 1
+            future = asyncio.get_running_loop().create_future()
+            future.set_result((len(list(ids)), []))
+            return future
+
+    async def restart():
+        queue = CountingQueue()
+        reloaded = NoticeCleanup(str(path), ttl_seconds=0.01,
+                                 delete_queue=queue)
+        reloaded.start()
+        await asyncio.sleep(0.05)
+        reloaded.stop()
+        return queue.calls, reloaded.pending(-12)
+
+    calls, pending = asyncio.run(restart())
+    assert calls == 0, "پس از ری‌استارت نباید هیچ حذفِ کهنه‌ای اجرا شود"
+    assert pending == []
 
 
 def test_notice_cleanup_abandons_after_bounded_retries_and_retains_peer(tmp_path):

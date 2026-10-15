@@ -236,7 +236,10 @@ def format_level(chat_id):
         lines.append("👑 فعال‌ترین عضو گروه: هنوز ثبت نشده\n\n")
     lines.append(f"{_bar(info)}\n")
     if info["level"] >= info["max_level"]:
-        lines.append("🌟 این گروه به بالاترین سطح (۱۵) رسیده است!")
+        # عدد سقف سطح از خودِ ماژول خوانده می‌شود تا با MAX_LEVEL هم‌خوان
+        # بماند (پیش‌تر «۱۵» ثابت نوشته شده بود و با سقف ۲۰ ناسازگار بود).
+        lines.append(
+            f"🌟 این گروه به بالاترین سطح ({fa(info['max_level'])}) رسیده است!")
     else:
         lines.append(
             f"📈 تا سطح {fa(info['level'] + 1)} فقط "

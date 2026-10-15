@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from types import SimpleNamespace
 
@@ -379,6 +380,20 @@ def test_tracker_leftover_timeout_does_not_reconnect():
 
 
 def test_governor_limits_and_p0_p1_order():
+    # 🔒 مقادیر محافظه‌کارانهٔ پیش‌فرض را خودِ تست تعیین می‌کند؛ وگرنه نتیجه به
+    # .env همان دستگاه وابسته می‌شد (روی دستگاه مالک BOT_RPC_TOTAL_LIMIT=3 است و
+    # تست با انتظار ۲ می‌شکست). فقط متغیرهای محیطی همین تست عوض می‌شوند و در
+    # پایان به حالت قبل برمی‌گردند.
+    limits = {
+        "BOT_RPC_TOTAL_LIMIT": "2",
+        "BOT_RPC_DELETE_LIMIT": "1",
+        "BOT_RPC_SEND_LIMIT": "1",
+        "BOT_RPC_HEAVY_LIMIT": "1",
+        "BOT_RPC_NONCRITICAL_LIMIT": "2",
+    }
+    previous = {name: os.environ.get(name) for name in limits}
+    os.environ.update(limits)
+
     async def scenario():
         governor = RpcGovernor.from_environment()
         assert governor.total_limit == 2
@@ -420,7 +435,14 @@ def test_governor_limits_and_p0_p1_order():
             pass
         return p1_wait_ms, p0_waiting, p3_waiting, still_p3, governor.snapshot()
 
-    p1_wait_ms, p0_waiting, p3_waiting, still_p3, snap = asyncio.run(scenario())
+    try:
+        p1_wait_ms, p0_waiting, p3_waiting, still_p3, snap = asyncio.run(scenario())
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
     assert p1_wait_ms < 50.0, p1_wait_ms
     assert p0_waiting is True
     assert p3_waiting is True
