@@ -15,7 +15,7 @@
 #   b2 status     → وضعیت bot2
 # ------------------------------------------------------------------
 set -u
-BOT2_DIR="$HOME/soroush-plus-antispam-bot-old-2"
+BOT2_DIR="$HOME/soroush-plus-antispam-bot-v2"
 BOT2_DATA="$HOME/.local/share/soroush-bot-bot2"
 cd "$BOT2_DIR" || { echo "❌ مسیر ربات ۲ پیدا نشد: $BOT2_DIR"; exit 1; }
 
@@ -39,7 +39,7 @@ case "$cmd" in
         pid="$(cat "$pidfile" 2>/dev/null)"
         if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
           # اطمینان: فقط اگر پروسه واقعاً متعلق به این clone باشد
-          if grep -qa "soroush-plus-antispam-bot-old-2\|BOT_INSTANCE=bot2" \
+          if grep -qa "soroush-plus-antispam-bot-v2\|BOT_INSTANCE=bot2" \
               "/proc/$pid/cmdline" "/proc/$pid/environ" 2>/dev/null; then
             kill "$pid" && stopped=1 && echo "⏹ bot2 child متوقف شد (pid=$pid)"
           else
@@ -60,7 +60,7 @@ except Exception:
 PY
 )"
       if [ -n "$wpid" ] && kill -0 "$wpid" 2>/dev/null; then
-        if grep -qa "soroush-plus-antispam-bot-old-2\|BOT_INSTANCE=bot2" \
+        if grep -qa "soroush-plus-antispam-bot-v2\|BOT_INSTANCE=bot2" \
             "/proc/$wpid/cmdline" "/proc/$wpid/environ" 2>/dev/null; then
           kill "$wpid" && stopped=1 && echo "⏹ bot2 watchdog متوقف شد (pid=$wpid)"
         fi
