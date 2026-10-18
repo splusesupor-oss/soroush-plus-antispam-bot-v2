@@ -153,7 +153,10 @@ def test_forty_group_mixed_send_delete_and_pings():
     assert before >= 6
 
 
-def test_isolated_governor_under_held_delete():
+def test_isolated_governor_under_held_delete(monkeypatch):
+    # Pin the default used by this test; a developer's .env may override it.
+    monkeypatch.setenv("BOT_RPC_TOTAL_LIMIT", "2")
+
     async def scenario():
         governor = RpcGovernor.from_environment()
         held = await governor.acquire(RpcAdmission(P1_DELETE, "delete", "DeleteMessagesRequest", "busy"))

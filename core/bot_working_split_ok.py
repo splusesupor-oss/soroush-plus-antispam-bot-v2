@@ -19,6 +19,7 @@ from modules.group_expiry import match_command as expiry_command
 from modules.group_expiry import sync_records as sync_expiry_records
 from modules.expiry_report import build_report as build_expiry_report
 from modules.admin_tools import run_cleanup_watcher
+from modules import free_tier
 from handlers.group_expiry_handler import (
     run_expiry_watcher as run_group_expiry_watcher,
 )
@@ -974,18 +975,24 @@ class SoroushAntiSpamBot:
         self.notice_cleanup.client = self.client
         if getattr(self, "admin_actions", None) is not None:
             self.admin_actions.notice_cleanup = self.notice_cleanup
-        self.notice_cleanup.start()
+        notice_cleanup_started = self.notice_cleanup.start()
         if hasattr(self, "health_monitor") and self.health_monitor is not None:
             self.health_monitor.start()
         # Diagnostic-only: PERFORMANCE SNAPSHOT every 30–60s plus a 5-minute
         # ACCUMULATION REPORT. Does not change queues, governor, or RPC.
         self.runtime_snapshot = RuntimeSnapshotMonitor(self, self.logger)
         self.runtime_snapshot.start()
-        self.logger.log_info(
-            "NOTICE CLEANUP STARTED "
-            f"ttl_s={self.notice_cleanup.ttl_seconds:g} "
-            f"pending_groups={len(self.notice_cleanup._items)}"
-        )
+        if notice_cleanup_started:
+            self.logger.log_info(
+                "NOTICE CLEANUP STARTED "
+                f"ttl_s={self.notice_cleanup.ttl_seconds:g} "
+                f"pending_groups={len(self.notice_cleanup._items)}"
+            )
+        else:
+            self.logger.log_info(
+                "NOTICE CLEANUP DISABLED BY PLAN "
+                f"pending_groups_preserved={len(self.notice_cleanup._items)}"
+            )
 
         async def temporary_state_cleanup_loop():
             while True:
@@ -1208,10 +1215,15 @@ class SoroushAntiSpamBot:
 
         asyncio.create_task(expiry_list_sync_loop())
 
-        # 🧹 ناظر پاکسازی خودکار — در ساعتِ تنظیم‌شده، پیام‌های گروه را پاک می‌کند.
+        # 🧹 ناظر پاکسازی زمان‌بندی‌شده فقط در پلن پولی بالا می‌آید.
+        # رکوردهای قدیمی خوانده/حذف/بازنشانی نمی‌شوند؛ در پلن رایگان هیچ
+        # watcher یا تسک حذف خودکاری ساخته نمی‌شود.
         if not hasattr(self, "cleanup_tasks"):
             self.cleanup_tasks = {}
-        asyncio.create_task(run_cleanup_watcher(self, logger=self.logger))
+        if free_tier.is_enabled("auto_cleanup"):
+            asyncio.create_task(run_cleanup_watcher(self, logger=self.logger))
+        else:
+            self.logger.log_info("AUTO CLEANUP DISABLED BY PLAN")
 
         async def is_currently_restricted(chat_id, user):
             """وضعیت فعلی عضو را از SPlusthon می‌خواند؛ خطا یعنی حفظ بن فعلی."""

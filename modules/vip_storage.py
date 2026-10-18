@@ -4,6 +4,7 @@ import json
 from modules.runtime_paths import runtime_config_file
 from modules.atomic_write import write_json
 from modules.group_id import normalize_group_id
+from modules import free_tier
 
 FILE = runtime_config_file("vip_users.json")
 
@@ -38,7 +39,9 @@ def _save(data):
 
 
 def add_vip(group_id, user_id):
-    """ثبت vip؛ False اگر قبلاً vip باشد."""
+    """ثبت vip؛ False اگر قبلاً vip باشد یا این قابلیت در پلن خاموش باشد."""
+    if not free_tier.is_enabled("vip"):
+        return False
     g = str(normalize_group_id(group_id))
     data = _load()
     ids = data.get(g)
@@ -54,7 +57,9 @@ def add_vip(group_id, user_id):
 
 
 def remove_vip(group_id, user_id):
-    """لغو vip؛ False اگر vip نباشد."""
+    """لغو vip؛ False اگر vip نباشد یا این قابلیت در پلن خاموش باشد."""
+    if not free_tier.is_enabled("vip"):
+        return False
     g = str(normalize_group_id(group_id))
     data = _load()
     ids = data.get(g)
@@ -70,6 +75,8 @@ def remove_vip(group_id, user_id):
 
 
 def is_vip(group_id, user_id):
+    if not free_tier.is_enabled("vip"):
+        return False
     try:
         data = _load()
         ids = data.get(str(normalize_group_id(group_id)))
@@ -79,6 +86,8 @@ def is_vip(group_id, user_id):
 
 
 def list_vips(group_id):
+    if not free_tier.is_enabled("vip"):
+        return []
     data = _load()
     ids = data.get(str(normalize_group_id(group_id)))
     if not isinstance(ids, list):

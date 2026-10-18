@@ -10,6 +10,7 @@ from typing import Optional
 
 from modules import clipboard_storage
 from modules import admin_tools
+from modules import free_tier
 
 try:
     from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
@@ -137,6 +138,10 @@ async def handle_command(bot, event, chat_id, user_id, sender, text: str) -> boo
     if command not in COMMANDS:
         return False
 
+    if not free_tier.is_enabled("clipboard"):
+        await _reply(event, free_tier.PAYWALL_MESSAGE)
+        return True
+
     if getattr(event, "is_private", False):
         await _reply(event, "❌ قابلیت کپی بورد فقط داخل گروه فعال است.")
         return True
@@ -185,6 +190,9 @@ async def handle_reply_save(bot, event, chat_id, user_id, sender, text: str) -> 
     pending_id = clipboard_storage.get_pending_guide(chat_id)
     if pending_id is None or _reply_id(event) != pending_id:
         return False
+    if not free_tier.is_enabled("clipboard"):
+        await _reply(event, free_tier.PAYWALL_MESSAGE)
+        return True
     if not _authorized(chat_id, user_id, sender):
         # A normal user replying to the guide must never alter the group
         # clipboard; leave the guide pending for an authorized operator.

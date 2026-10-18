@@ -47,6 +47,11 @@ def draw(chat_id, user_id):
     return item
 
 
+def setup_function(_function):
+    # Another test module may select a different economy backend at collection.
+    _storage.use_file(_STORE_DIR / "economy.json")
+
+
 # ===========================================================================
 # ۱ و ۲ و ۳ — بانک تازه
 # ===========================================================================

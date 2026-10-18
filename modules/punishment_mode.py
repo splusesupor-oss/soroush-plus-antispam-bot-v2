@@ -20,6 +20,7 @@ from pathlib import Path
 from modules.runtime_paths import CONFIG_DIR
 
 from modules.group_id import normalize_group_id
+from modules import free_tier
 
 _BASE = CONFIG_DIR
 _FILE = _BASE / "punishment_mode.json"
@@ -81,6 +82,8 @@ def is_mute(chat_id):
 def set_mode(chat_id, mode):
     """ثبت حالت مجازات گروه؛ نوشتن اتمیک."""
     global _cache, _cache_mtime
+    if not free_tier.is_enabled("punishment_settings"):
+        return get_mode(chat_id)
     if mode not in (MODE_BAN, MODE_MUTE):
         raise ValueError(f"invalid punishment mode: {mode!r}")
     data = dict(_load())
@@ -118,9 +121,12 @@ def mode_label(mode):
 
 
 def begin_change(chat_id, user_id):
+    if not free_tier.is_enabled("punishment_settings"):
+        return False
     _prune_pending()
     _pending[(_key(chat_id), str(user_id))] = time.time()
     _prune_pending()
+    return True
 
 
 def has_pending(chat_id, user_id):

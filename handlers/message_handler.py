@@ -143,6 +143,7 @@ from modules.outgoing_profiler import (
 )
 from handlers.admin_handler import handle_admin_commands
 from modules import admin_tools
+from modules import free_tier
 # 🎮 روشن/خاموش کردن بازی‌های داخلی به تفکیک گروه (storage و گارد خالص).
 from modules import entertainment_control
 from modules.group_dispatch import PRIORITY_ADMIN, classify_priority
@@ -2867,6 +2868,9 @@ def _search_reply_message_id(event):
 async def _handle_google_search_group_message(bot, event, chat_id, user_id, sender,
                                    clean_text, message_text):
     """Handle Google Search administration and eligible prompts for one group."""
+    if free_tier.feature_for_text(clean_text) == "ai" and not free_tier.is_enabled("ai"):
+        await event.reply(free_tier.PAYWALL_MESSAGE)
+        return True
     if event.is_private:
         return False
     sender_username = getattr(sender, "username", None)
@@ -2963,7 +2967,32 @@ async def _handle_google_search_group_message(bot, event, chat_id, user_id, send
     reply_id = _search_reply_message_id(event)
     request_text = message_text.strip()
     is_information_request, topic = web_search.factual_intent(request_text)
-    if not enabled or not allowed_user or not reply_id or not is_information_request:
+    if not reply_id or not is_information_request:
+        return False
+
+    # Reply-based factual AI has no explicit command. Verify that this is the
+    # same existing route (a factual question replying to the bot), then stop
+    # before any provider/model/network search is scheduled in the free plan.
+    if not free_tier.is_enabled("ai"):
+        try:
+            reply_message = await bot.client.get_messages(chat_id, ids=reply_id)
+        except Exception as error:
+            bot.logger.log_error(
+                f"SEARCH REPLY LOAD FAILED chat_id={chat_id} reply_id={reply_id} error={error!r}"
+            )
+            return False
+        if not reply_message:
+            return False
+        reply_sender_id = getattr(reply_message, "sender_id", None)
+        if reply_sender_id is None:
+            reply_sender = await reply_message.get_sender()
+            reply_sender_id = getattr(reply_sender, "id", None)
+        if str(reply_sender_id) != str(getattr(bot, "bot_account_id", None)):
+            return False
+        await event.reply(free_tier.PAYWALL_MESSAGE)
+        return True
+
+    if not enabled or not allowed_user:
         return False
     bot.logger.log_info(
         "AI ACCESS CHECK "
@@ -3071,6 +3100,30 @@ async def handle_new_message(bot, event):
                 message_text = caption
             except BaseException:
                 pass
+
+        # نسخهٔ رایگان: محدودیت مجوزها پیش از هر ثبت وضعیت، فیلتر، جستجوی
+        # بیرونی یا اجرای عملیات اعمال می‌شود. این گارد مستقل از نقش فرستنده
+        # است؛ مالک، ادمین و کاربر عادی همگی همان پاسخ را می‌گیرند.
+        early_command = normalize_command(message_text)
+        early_sender_id = (
+            getattr(event, "sender_id", None)
+            or getattr(getattr(event, "sender", None), "id", None)
+        )
+        restricted_feature = free_tier.feature_for_event(
+            early_command, event, chat_id, early_sender_id
+        )
+        if restricted_feature and not free_tier.is_enabled(restricted_feature):
+            # Pending prompts are transient only. Cancel them so an old
+            # confirmation cannot mutate a paid setting; durable settings,
+            # group data, and stored cleanup schedules are never touched.
+            if restricted_feature == "warning_settings":
+                warning_threshold.clear_pending(chat_id, early_sender_id)
+            elif restricted_feature == "punishment_settings":
+                punishment_mode.clear_pending(chat_id, early_sender_id)
+            elif restricted_feature == "auto_cleanup":
+                admin_tools._PENDING_CLEANUP.pop(chat_id, None)
+            await event.reply(free_tier.PAYWALL_MESSAGE)
+            return
 
         if not getattr(event, "is_private", False):
             try:
@@ -4707,6 +4760,18 @@ async def handle_new_message(bot, event):
                 await event.reply(result)
                 return
 
+
+        # پاسخ‌های یک دور بازیِ قدیمی/درحال اجرا هم در نسخهٔ رایگان نباید
+        # وارد مسیر پردازش بازی شوند. فهرست بازی‌ها صریحاً از این گارد مستثناست.
+        if (
+            not free_tier.is_enabled("games")
+            and clean_text.strip() not in {
+                "لیست بازی", "لیست بازی ها", "لیست بازی‌ها", "بازی ها", "بازی‌ها",
+            }
+            and is_game_answer_active(chat_id, user_id)
+        ):
+            await event.reply(free_tier.PAYWALL_MESSAGE)
+            return
 
         # ------------------------------------------------------------------
         # 🎮 کنترل سرگرمی به تفکیک گروه.
@@ -6672,14 +6737,14 @@ async def handle_new_message(bot, event):
                     await event.reply("❌ فقط مالک و ادمین‌ها اجازه حذف پیام دارند")
                     return
 
-                parts = clean_text.split()
-                if len(parts) != 2 or not parts[1].isdigit():
-                    await event.reply("❌ استفاده: پاک + عدد مورد نیاز")
+                delete_status, requested_count = free_tier.parse_bulk_delete_count(
+                    clean_text
+                )
+                if delete_status == "invalid":
+                    await event.reply("❌ استفاده: پاک + عددی بین 1 تا 500")
                     return
-
-                requested_count = int(parts[1])
-                if requested_count < 1 or requested_count > 700:
-                    await event.reply("❌ تعداد پیام باید بین 1 تا 700 باشد")
+                if delete_status == "premium":
+                    await event.reply(free_tier.PAYWALL_MESSAGE)
                     return
 
                 # cooldown و Lock برای کل گروه، نه فقط هر کاربر؛ تا چند

@@ -16,6 +16,7 @@ from pathlib import Path
 from modules.runtime_paths import CONFIG_DIR
 
 from modules.group_id import normalize_group_id
+from modules import free_tier
 
 _BASE = CONFIG_DIR
 _FILE = _BASE / "warning_threshold.json"
@@ -73,6 +74,8 @@ def get_threshold(chat_id, default=DEFAULT_THRESHOLD):
 def set_threshold(chat_id, value):
     """ثبت آستانهٔ ۱ تا ۱۲ برای گروه؛ نوشتن اتمیک."""
     global _cache, _cache_mtime
+    if not free_tier.is_enabled("warning_settings"):
+        return None
     value = int(value)
     if not (MIN_THRESHOLD <= value <= MAX_THRESHOLD):
         raise ValueError(f"threshold out of range: {value}")
@@ -101,8 +104,11 @@ def set_threshold(chat_id, value):
 
 def begin_change(chat_id, user_id):
     """شروع انتظار برای عدد از همین کاربر در همین گروه."""
+    if not free_tier.is_enabled("warning_settings"):
+        return False
     _prune_pending()
     _pending[(_key(chat_id), str(user_id))] = time.time()
+    return True
 
 
 def has_pending(chat_id, user_id):

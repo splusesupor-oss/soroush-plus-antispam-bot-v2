@@ -378,7 +378,12 @@ def test_tracker_leftover_timeout_does_not_reconnect():
     assert cg.live_keepalive_count(sender) <= 1
 
 
-def test_governor_limits_and_p0_p1_order():
+def test_governor_limits_and_p0_p1_order(monkeypatch):
+    # Pin the default used by this test; a developer's .env may override it.
+    monkeypatch.setenv("BOT_RPC_TOTAL_LIMIT", "2")
+    monkeypatch.setenv("BOT_RPC_DELETE_LIMIT", "1")
+    monkeypatch.setenv("BOT_RPC_SEND_LIMIT", "1")
+
     async def scenario():
         governor = RpcGovernor.from_environment()
         assert governor.total_limit == 2

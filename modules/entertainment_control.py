@@ -30,6 +30,7 @@ import os
 from modules.atomic_write import write_json
 from modules.group_id import normalize_group_id
 from modules.runtime_paths import runtime_config_file
+from modules import free_tier
 
 # ---------------------------------------------------------------------------
 # entity (در تست و روی کلاینت‌های بدون splusthon، کلاس جایگزین کافی است)
@@ -90,6 +91,8 @@ GAME_COMMANDS = frozenset({
     "حدس پرچم",
     "تصحیح کلمات",
     "چهار گزینه ای",
+    "شروع دوباره حدس ایموجی",
+    "ریست حدس ایموجی",
     "کی بیشتر بلده",
     "دروغ یا حقیقت",
     "جای خالی",
@@ -298,9 +301,15 @@ async def send_permission_denied(event):
 def blocks(chat_id, text):
     """گارد خالص، بدون I/O شبکه — برای تست آسان.
 
-    True یعنی این دستور بازی نباید اجرا شود.
+    True یعنی این دستور بازی نباید اجرا شود؛ entitlement نسخهٔ رایگان
+    مستقل از toggle گروه بررسی می‌شود.
     """
-    return is_game_command(text) and not is_enabled(chat_id)
+    if not is_game_command(text):
+        return False
+    return (
+        not free_tier.is_enabled("games")
+        or not is_enabled(chat_id)
+    )
 
 
 async def guard(event, chat_id, text):
@@ -309,6 +318,9 @@ async def guard(event, chat_id, text):
     فقط یک پیام هشدار ارسال می‌شود؛ هیچ state، تایمر، پرداخت سکه یا
     شمارنده‌ای در این مسیر ساخته نمی‌شود.
     """
+    if is_game_command(text) and not free_tier.is_enabled("games"):
+        await event.reply(free_tier.PAYWALL_MESSAGE)
+        return True
     if not blocks(chat_id, text):
         return False
     await send_blocked_notice(event)

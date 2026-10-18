@@ -124,7 +124,24 @@ async def try_handle_private_start(bot, event):
 
 
 async def handle_private_callback(bot, event):
-    """Answer the test button without sending a new message."""
+    """Guard paid command callbacks, then answer the free test button."""
+    from modules import free_tier
+
+    callback_feature = free_tier.feature_for_callback(_callback_data_text(event))
+    if callback_feature and not free_tier.is_enabled(callback_feature):
+        answer = getattr(event, "answer", None)
+        if callable(answer):
+            try:
+                await answer(free_tier.PAYWALL_MESSAGE)
+                return True
+            except Exception:
+                pass
+        reply = getattr(event, "reply", None)
+        if callable(reply):
+            await reply(free_tier.PAYWALL_MESSAGE)
+            return True
+        return False
+
     if not is_private_event(event):
         return False
     if not is_test_button_callback(event):

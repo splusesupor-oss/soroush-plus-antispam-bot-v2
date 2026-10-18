@@ -16,6 +16,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from modules.atomic_write import write_json
 from modules.group_id import normalize_group_id
 from modules.runtime_paths import runtime_config_file
+from modules import free_tier
 
 
 FILE = Path(runtime_config_file("clipboard.json"))
@@ -241,6 +242,8 @@ def validate_text(text) -> Tuple[bool, Optional[str]]:
 
 def save(chat_id, text, entities=()) -> Tuple[bool, Optional[str]]:
     """Replace the clipboard for one group, after validating its content."""
+    if not free_tier.is_enabled("clipboard"):
+        return False, free_tier.PAYWALL_MESSAGE
     ok, reason = validate_text(text)
     if not ok:
         return False, reason
@@ -278,6 +281,8 @@ def get_raw(chat_id) -> Optional[Dict[str, Any]]:
 
 
 def set_pending_guide(chat_id, message_id, *, now=None) -> bool:
+    if not free_tier.is_enabled("clipboard"):
+        return False
     if message_id is None:
         return False
     try:

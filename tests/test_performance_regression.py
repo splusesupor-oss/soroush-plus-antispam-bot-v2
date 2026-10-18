@@ -34,6 +34,12 @@ import economy.storage as _storage  # noqa: E402
 _STORE_DIR = Path(tempfile.mkdtemp())
 _storage.use_file(_STORE_DIR / "economy.json")
 
+
+def setup_function(_function):
+    # Other test modules select their own economy backend during collection;
+    # reselect this module's isolated file before each test.
+    _storage.use_file(_STORE_DIR / "economy.json")
+
 import modules.multiple_choice as mc  # noqa: E402
 from economy import game_progress as progress  # noqa: E402
 from modules import connection_guard as cg  # noqa: E402
@@ -174,7 +180,7 @@ def test_hot_path_does_not_block_event_loop():
     نوشتن روی دیسک نباید پردازش پیام را متوقف کند."""
     print("\n### 💾 مسیر داغ حلقهٔ رویداد را بلاک نمی‌کند")
     blocking = {"n": 0}
-    original = _storage._write
+    original = _storage._json_write
     main_thread = threading.get_ident()
 
     def counting(data):
@@ -184,7 +190,7 @@ def test_hot_path_does_not_block_event_loop():
         return original(data)
 
     async def scenario():
-        _storage._write = counting
+        _storage._json_write = counting
         try:
             mc.reset_all()
             blocking["n"] = 0
@@ -193,7 +199,7 @@ def test_hot_path_does_not_block_event_loop():
                 mc.answer_question(-9001, str(item["answer"]), 6000 + uid)
             await asyncio.sleep(0.05)   # فرصت به نوشتن پس‌زمینه
         finally:
-            _storage._write = original
+            _storage._json_write = original
 
     asyncio.run(scenario())
     check("۱۰ سوال کامل هیچ نوشتن بلاک‌کننده‌ای نداشت", blocking["n"] == 0,

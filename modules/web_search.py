@@ -12,12 +12,16 @@ from requests.adapters import HTTPAdapter
 from requests.exceptions import ConnectionError, ReadTimeout, RequestException
 from urllib3.util.retry import Retry
 
+from modules import free_tier
+
 FILE = runtime_log_file("search_cooldown.json", migrate=True)
 SEARCH_UNAVAILABLE = "❌ ارتباط با سرور جستجو برقرار نشد، چند لحظه بعد دوباره تلاش کنید."
 NO_RESULTS = "🔍 نتیجه‌ای پیدا نشد."
 
 
 def can_search(user_id):
+    if not free_tier.is_enabled("search"):
+        return False, 0
     FILE.parent.mkdir(exist_ok=True)
     try:
         data = json.loads(FILE.read_text(encoding="utf-8"))
@@ -84,6 +88,8 @@ def _extract_results(html):
 
 
 def search_web(query):
+    if not free_tier.is_enabled("search"):
+        return free_tier.PAYWALL_MESSAGE
     query = (query or "").strip()
     if not query:
         return NO_RESULTS
@@ -230,6 +236,8 @@ def _factual_text(results, topic, question):
 
 def search_factual(query, question=None):
     """DuckDuckGo factual summary; public ``جستجو`` output remains unchanged."""
+    if not free_tier.is_enabled("ai"):
+        raise FactualSearchError("feature_disabled")
     query = (query or "").strip()
     if not query:
         raise FactualSearchError("no_results")

@@ -43,6 +43,7 @@ from modules.fox_games.session_core import (
 # شود، بازیِ خاموش باز هم اجرا نمی‌شود. هیچ state یا تایمری پیش از این
 # گارد ساخته نمی‌شود.
 from modules import entertainment_control
+from modules import free_tier
 
 # دستورهایی که این روتر مالک آن‌هاست.
 FOX_GAME_COMMANDS = frozenset({
@@ -1188,6 +1189,14 @@ async def handle(bot, event, chat_id, user_id, sender, text, logger=None):
         normalize_text("نبرد"): (battle, lambda b, e, c, l: _start_battle(b, e, c, user_id, sender, l)),
         normalize_text("کارگاه"): (karagah, _start_karagah),
     }
+
+    if not free_tier.is_enabled("games") and (
+        command in start_games or any_active(chat_id)
+    ):
+        # لایهٔ entitlement در نقطهٔ اجرای روتر: هیچ session، تایمر یا جایزه‌ای
+        # حتی در صورت فراخوانی مستقیم این تابع ساخته نمی‌شود.
+        await event.reply(free_tier.PAYWALL_MESSAGE)
+        return True
 
     if command in start_games:
         # 🎮 لایهٔ دوم گارد سرگرمی — پیش از هر state، تایمر یا پرداخت سکه.

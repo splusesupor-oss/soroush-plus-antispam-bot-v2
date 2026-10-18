@@ -22,6 +22,7 @@ from pathlib import Path
 from modules.runtime_paths import CONFIG_DIR
 from modules import runtime_db
 from modules.atomic_write import write_json
+from modules import free_tier
 
 # منبعِ مرکزیِ زمان و timezone پروژه (تهران).
 from modules.time_utils import TEHRAN, now_local
@@ -288,6 +289,8 @@ def log_action(chat_id, actor, action, target=None, note=""):
 
 def get_log(chat_id, limit=30):
     """آخرین لاگ‌های ۲۴ ساعتِ اخیرِ این گروه (جدیدترین‌ها اول)."""
+    if not free_tier.is_enabled("admin_log_view"):
+        return []
     if _USE_SQLITE_LOG:
         _ensure_admin_log_sqlite()
         cutoff = time.time() - LOG_TTL_SECONDS
@@ -306,19 +309,28 @@ def get_log(chat_id, limit=30):
 
 
 def clear_log(chat_id):
+    # The free edition may not alter retained admin audit records.
+    if not free_tier.is_enabled("admin_log_view"):
+        return False
     if _USE_SQLITE_LOG:
         _ensure_admin_log_sqlite()
         runtime_db.execute(
             "DELETE FROM admin_events WHERE group_id=?", (str(chat_id),)
         )
-        return
+        return True
     data = _load_admin_log()
     data.pop(str(chat_id), None)
     _save_admin_log(data)
+    return True
 
 
 def export_admin_log_json(path=None):
-    """Export retained admin events for an emergency JSON rollback."""
+    """Export retained admin events for an emergency JSON rollback.
+
+    Returns ``None`` in the free plan and does not read or write the log store.
+    """
+    if not free_tier.is_enabled("admin_log_view"):
+        return None
     target = Path(path) if path else _ADMIN_LOG_FILE
     if _USE_SQLITE_LOG:
         _ensure_admin_log_sqlite()
@@ -355,7 +367,20 @@ def format_log(chat_id, limit=30):
 
     خروجی ``(text, entities)``.
     """
-    from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+    if not free_tier.is_enabled("admin_log_view"):
+        return free_tier.PAYWALL_MESSAGE, []
+    try:
+        from splusthon.tl.types import MessageEntityBlockquote, MessageEntityBold
+    except ImportError:
+        class MessageEntityBlockquote:
+            def __init__(self, offset=0, length=0):
+                self.offset = offset
+                self.length = length
+
+        class MessageEntityBold:
+            def __init__(self, offset=0, length=0):
+                self.offset = offset
+                self.length = length
 
     entries = get_log(chat_id, limit)
     if not entries:
@@ -687,6 +712,8 @@ def set_cleanup(chat_id, day, time_str, count, *, scheduled_at=None, now=None):
     همان مقدار مانعِ تغییر تصمیم «امروز/فردا» بین مرحلهٔ ساعت و شمارش،
     خصوصاً نزدیک نیمه‌شب، می‌شود.
     """
+    if not free_tier.is_enabled("auto_cleanup"):
+        return None
     now = now_local() if now is None else now
     if scheduled_at is None:
         scheduled_at = compute_scheduled_at(day, time_str, now)
@@ -717,9 +744,13 @@ def get_cleanup(chat_id):
 
 
 def clear_cleanup(chat_id):
+    if not free_tier.is_enabled("auto_cleanup"):
+        return False
     data = _load_cleanups()
-    data.pop(str(chat_id), None)
-    _save_cleanups(data)
+    existed = data.pop(str(chat_id), None) is not None
+    if existed:
+        _save_cleanups(data)
+    return existed
 
 
 def all_cleanups():
@@ -727,6 +758,8 @@ def all_cleanups():
 
 
 def mark_cleanup_run(chat_id, scheduled_at):
+    if not free_tier.is_enabled("auto_cleanup"):
+        return False
     data = _load_cleanups()
     rec = data.get(str(chat_id))
     if rec:
@@ -891,6 +924,9 @@ async def execute_cleanup(bot, chat_id, count, logger=None):
     ترتیب: قفل → اعلام → حذفِ دسته‌ای (۱۰۰تایی) → بازکردن → اعلامِ پایان.
     همه در یک تسکِ پس‌زمینه انجام می‌شود تا حلقهٔ پیام بلاک نشود.
     """
+    if not free_tier.is_enabled("auto_cleanup"):
+        return False
+
     def _log(msg):
         try:
             if logger is not None:
@@ -986,6 +1022,8 @@ async def run_cleanup_watcher(bot, logger=None, interval=None):
     هر ``interval`` ثانیه (پیش‌فرض ۳۰) بررسی می‌کند؛ اگر زمانِ اجرا رسیده و
     هنوز اجرا نشده باشد (``last_run`` برابرِ آن زمان نباشد)، اجرا می‌شود.
     """
+    if not free_tier.is_enabled("auto_cleanup"):
+        return
     import asyncio
     delay = 30 if interval is None else interval
     while True:

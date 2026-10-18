@@ -474,6 +474,13 @@ def test_ban_execution_and_admin_check_logs_are_debug_only():
 def test_cleanup_expired_handler_state_sweeps_ttl_maps():
     print("\\n### جاروی TTL هندلر نقشه‌های منقضی را بدون سقف پاک می‌کند")
     handler.ADMIN_PERMISSION_CACHE.clear()
+
+    class TaskState:
+        def __init__(self, finished):
+            self.finished = finished
+
+        def done(self):
+            return self.finished
     bot = SimpleNamespace(
         native_group_admin_cache={
             ("g1", "u1"): (True, 10.0),
@@ -492,8 +499,8 @@ def test_cleanup_expired_handler_state_sweeps_ttl_maps():
             ("g1", 2): {"ids": {2}, "is_forward": False, "expires": 70.0},
         },
         group_timer_tasks={
-            11: {SimpleNamespace(done=lambda: True)},
-            12: {SimpleNamespace(done=lambda: False)},
+            11: {TaskState(True)},
+            12: {TaskState(False)},
         },
         _spam_cleanup_incidents={
             ("g", "orphan"): {

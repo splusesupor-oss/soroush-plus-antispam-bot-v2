@@ -74,8 +74,24 @@ class Bot:
         self.logger = Logger()
 
 
+_LOOP = asyncio.new_event_loop()
+asyncio.set_event_loop(_LOOP)
+
+
 def run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # Keep one test loop alive: game timers are expected to outlive one handler
+    # call and Python 3.13 no longer recreates the global loop automatically.
+    return _LOOP.run_until_complete(coro)
+
+
+def teardown_module():
+    pending = asyncio.all_tasks(_LOOP)
+    for task in pending:
+        task.cancel()
+    if pending:
+        _LOOP.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+    _LOOP.close()
+    asyncio.set_event_loop(None)
 
 
 # ---------------------------------------------------------------------------
@@ -99,24 +115,25 @@ def test_minesweeper_reward_penalty_and_quota():
     bot = Bot()
     u1 = User(1001, "علی", "ali")
 
-    # دور ۱: برد → +۳ برنز
+    # دور ۱: خانه امن → +۵ نقره طبق economy.rewards
     run(router.handle(bot, Event(CHAT, u1), CHAT, 1001, u1, "مین یاب", bot.logger))
     state = ms._ACTIVE.get((str(CHAT), "1001"))
     assert state is not None
-    safe = next(c for c in range(1, 10) if c != state["mine"])
+    safe = state["safe"]
     ev = Event(CHAT, u1)
     run(router.handle(bot, ev, CHAT, 1001, u1, str(safe), bot.logger))
-    assert ev.said("سکه برنز")
-    assert get_balance(CHAT, 1001)["bronze"] == 3
+    assert ev.said("سکه نقره")
+    assert get_balance(CHAT, 1001)["silver"] == 5
 
-    # دور ۲: باخت → ۲- برنز
+    # دور ۲: خانه ناامن → جریمه ۱۰ برنز (در نبود موجودی، جریمه معوق می‌ماند)
     run(router.handle(bot, Event(CHAT, u1), CHAT, 1001, u1, "مین یاب", bot.logger))
     state = ms._ACTIVE.get((str(CHAT), "1001"))
-    mine = state["mine"]
+    assert state is not None
+    unsafe = next(cell for cell in range(1, 10) if cell != state["safe"])
     ev = Event(CHAT, u1)
-    run(router.handle(bot, ev, CHAT, 1001, u1, str(mine), bot.logger))
-    assert ev.said("روی مین رفت") or ev.said("💥")
-    assert get_balance(CHAT, 1001)["bronze"] == 1
+    run(router.handle(bot, ev, CHAT, 1001, u1, str(unsafe), bot.logger))
+    assert ev.said("مین در خانه")
+    assert get_balance(CHAT, 1001)["bronze"] == 0
 
     # شانس‌ها: ۲ بازی امروز → سومی مسدود
     ev = Event(CHAT, u1)
@@ -228,10 +245,11 @@ def test_user_history_format_and_24h_reset():
 # ---------------------------------------------------------------------------
 def test_group_level_calculation_and_format():
     gl.reset()
-    assert gl.level_for(0) == 1
-    assert gl.level_for(499) == 1
-    assert gl.level_for(500) == 2
-    assert gl.level_for(10 ** 9) == 15  # سقف
+    assert gl.level_for(0) == 0
+    assert gl.level_for(499) == 0
+    assert gl.level_for(500) == 0
+    assert gl.level_for(1000) == 1
+    assert gl.level_for(10 ** 9) == 20  # سقف
     text = gl.format_level(CHAT)
     assert "سطح فعلی" in text and "فعال‌ترین عضو" in text
     gl.reset()

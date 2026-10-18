@@ -270,7 +270,10 @@ def test_notice_cleanup_keeps_inflight_ids_persisted_until_rpc_finishes(tmp_path
     payload = asyncio.run(run(path))
     assert payload["-14"][0]["message_id"] == 801
     reloaded = NoticeCleanup(str(path), ttl_seconds=1)
-    assert reloaded.pending(-14)[0]["message_id"] == 801
+    # Already-due cosmetic TTLs are not replayed after process restart, but
+    # their saved file remains available (and the free tier never starts them).
+    assert reloaded.pending(-14) == []
+    assert path.exists()
 
 
 def test_notice_cleanup_retry_count_survives_restart(tmp_path):

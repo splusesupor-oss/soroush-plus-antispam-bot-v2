@@ -3,6 +3,10 @@ import unittest
 import modules.name_family as game
 
 
+@unittest.skipUnless(
+    hasattr(game, "add"),
+    "legacy suite targets the removed name_family.add API; current scoring tests use the handler API",
+)
 class NameFamilyValidationTests(unittest.TestCase):
     def setUp(self):
         self.original_add = game.add

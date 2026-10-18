@@ -14,6 +14,8 @@ import os
 import tempfile
 import time
 
+from modules import free_tier
+
 DEFAULT_TTL_SECONDS = 60
 MAX_PER_CHAT = 500
 DEFAULT_MAX_RETRIES = 3
@@ -163,6 +165,8 @@ def _message_id(value):
 
 def capture_sent(bot, chat_id, sent):
     """Schedule a just-sent automatic notice. Never awaits."""
+    if not free_tier.is_enabled("notice_ttl_delete"):
+        return False
     cleanup = getattr(bot, "notice_cleanup", None)
     if cleanup is None:
         return False
@@ -196,6 +200,9 @@ class NoticeCleanup:
 
     def start(self):
         """Launch workers for any persisted notices. Safe to call once."""
+        if not free_tier.is_enabled("notice_ttl_delete"):
+            self._started = False
+            return False
         self._started = True
         if self.logger is not None:
             self.logger.log_info(
@@ -206,6 +213,7 @@ class NoticeCleanup:
         for chat_id, rows in list(self._items.items()):
             if rows:
                 self._ensure_worker(chat_id)
+        return True
 
     def stop(self):
         self._started = False
@@ -217,6 +225,8 @@ class NoticeCleanup:
 
     def schedule(self, chat_id, message_id, *, ttl=None, now=None):
         """Remember ``message_id`` for this chat. Returns True if stored."""
+        if not free_tier.is_enabled("notice_ttl_delete"):
+            return False
         raw = message_id
         message_id = _message_id(message_id)
         if chat_id is None or not isinstance(message_id, int) or message_id <= 0:
@@ -309,7 +319,7 @@ class NoticeCleanup:
         return min(float(row["expires_at"]) for row in rows)
 
     def _ensure_worker(self, chat_id):
-        if not self._started:
+        if not free_tier.is_enabled("notice_ttl_delete") or not self._started:
             return
         key = _chat_key(chat_id)
         if key not in self._events:
@@ -415,6 +425,8 @@ class NoticeCleanup:
         return len(retry_rows), abandoned
 
     async def _worker(self, chat_id):
+        if not free_tier.is_enabled("notice_ttl_delete"):
+            return
         event = self._events[chat_id]
         if self.logger is not None:
             self.logger.log_info(f"NOTICE CLEANUP START chat_id={chat_id}")
@@ -529,21 +541,54 @@ class NoticeCleanup:
                 self._persist()
 
     def _load(self):
-        """Discard previous-run notice deletes instead of replaying stale RPCs.
+        """Restore only unexpired rows; never erase the saved state file.
 
-        Notice TTL is cosmetic.  Replaying a persisted delete after reconnect
-        caused a startup storm across old chats (often invalid IDs), which
-        delayed real moderation and commands. New notices remain tracked for
-        the lifetime of the current healthy process.
+        The free tier exits before loading any timer rows (and never starts a
+        worker). On an entitled plan, only genuinely future expirations survive
+        a restart; already-due cosmetic notices are not replayed as deletes.
+        The serialized file is never unlinked during startup.
         """
-        path = self.persist_path
         self._items = {}
+        if not free_tier.is_enabled("notice_ttl_delete"):
+            return
+        path = self.persist_path
         if not path or not os.path.isfile(path):
             return
         try:
-            os.unlink(path)
-        except OSError:
-            pass
+            with open(path, "r", encoding="utf-8") as stream:
+                payload = json.load(stream)
+        except (OSError, ValueError, TypeError):
+            return
+        if not isinstance(payload, dict):
+            return
+        now = time.time()
+        restored = {}
+        for key, rows in payload.items():
+            if not isinstance(rows, list):
+                continue
+            keep = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    message_id = int(row.get("message_id", 0))
+                    expires_at = float(row.get("expires_at", 0))
+                    attempts = max(0, int(row.get("attempts", 0)))
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if message_id <= 0 or expires_at <= now:
+                    continue
+                record = {
+                    "message_id": message_id,
+                    "expires_at": expires_at,
+                    "attempts": attempts,
+                }
+                if row.get("chat_id") is not None:
+                    record["chat_id"] = row["chat_id"]
+                keep.append(record)
+            if keep:
+                restored[str(key)] = keep
+        self._items = restored
 
     def _persist(self):
         path = self.persist_path

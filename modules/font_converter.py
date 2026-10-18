@@ -116,6 +116,9 @@ def sans_bold_italic(text):
 
 def make_fonts(text):
     """Return only character-conversion font styles, never decorative frames."""
+    from modules import free_tier
+    if not free_tier.is_enabled("font_creation"):
+        return []
     return [
         bold(text),
         mono(text),

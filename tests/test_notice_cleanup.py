@@ -73,7 +73,7 @@ def test_new_notice_waits_its_own_ttl():
 
 
 def test_persist_survives_restart():
-    print("\n### بعد از ری‌استارت صف باقی می‌ماند")
+    print("\n### صف قدیمی replay نمی‌شود، اما فایل state حفظ می‌شود")
     handle, path = tempfile.mkstemp(suffix=".json")
     os.close(handle)
     os.unlink(path)
@@ -84,7 +84,7 @@ def test_persist_survives_restart():
         second = NoticeCleanup(path, ttl_seconds=60)
         pending = second.pending(-5)
         check("stale rows are not replayed", pending == [], f"-> {pending}")
-        check("stale persistence removed", not os.path.exists(path))
+        check("saved notice state is preserved", os.path.exists(path))
     finally:
         if os.path.isfile(path):
             os.unlink(path)

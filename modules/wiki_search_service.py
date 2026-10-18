@@ -5,6 +5,8 @@ from urllib.parse import quote
 
 import requests
 
+from modules import free_tier
+
 _SEARCH_URL = "https://fa.wikipedia.org/w/rest.php/v1/search/page?q={query}&limit=1"
 _SUMMARY_URL = "https://fa.wikipedia.org/api/rest_v1/page/summary/{key}"
 _SESSION = requests.Session()
@@ -21,6 +23,8 @@ def _clean(value):
 
 def answer(query):
     """Return a short factual summary; no API key, no generative provider."""
+    if not free_tier.is_enabled("ai"):
+        raise WikiSearchError("feature_disabled")
     query = " ".join(str(query or "").strip().split())
     if not query:
         raise WikiSearchError("empty_query")

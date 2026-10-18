@@ -119,7 +119,7 @@ def test_permission_circuit_breaker_lifecycle():
     assert not cb.is_open(chat_id)
 
     # 2. Trip on failure -> OPEN
-    cb.record_failure(chat_id, ChatAdminRequiredError())
+    cb.record_failure(chat_id, ChatAdminRequiredError(request=None))
     assert cb.is_open(chat_id) is True
     assert cb.can_execute(chat_id) is False  # Blocked fast!
 
@@ -134,7 +134,7 @@ def test_permission_circuit_breaker_lifecycle():
     assert cb.can_execute(chat_id) is True
 
     # 5. Manual reset
-    cb.record_failure(chat_id, ChatAdminRequiredError())
+    cb.record_failure(chat_id, ChatAdminRequiredError(request=None))
     assert cb.is_open(chat_id) is True
     cb.reset(chat_id)
     assert cb.is_open(chat_id) is False
