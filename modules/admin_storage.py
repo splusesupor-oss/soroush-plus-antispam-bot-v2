@@ -59,6 +59,14 @@ def add_admin(group_id, user_id, username=None):
     return True
 
 
+def count_admins(group_id):
+    """Number of admins currently registered for ``group_id``."""
+    entries = load_admins().get(normalize_group_id(group_id), [])
+    if not isinstance(entries, list):
+        return 0
+    return len(entries)
+
+
 def is_admin(group_id, user_id, username=None):
     """رکوردهای جدید ID-based و رکوردهای قدیمی username-based را می‌پذیرد."""
     if user_id is None:

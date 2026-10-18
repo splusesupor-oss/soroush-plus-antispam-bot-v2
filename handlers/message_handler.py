@@ -127,7 +127,13 @@ from modules.spam_history import get_message_ids, get_user_history, clear_user
 from modules.web_search import can_search, search_web
 from modules.jorat_haghighat import get_jorat, get_haghighat
 from modules.font_converter import make_fonts
-from modules.admin_storage import add_admin, remove_admin, is_admin, load_admins
+from modules.admin_storage import (
+    add_admin,
+    remove_admin,
+    is_admin,
+    load_admins,
+    count_admins,
+)
 from modules.banned_storage import add_banned, load_banned, save_banned, is_banned
 from modules.removed_users_reset import reset_system_removed_users
 from modules.group_storage import set_group_owner, get_group_owner, remove_group_owner
@@ -2556,6 +2562,10 @@ def _can_manage_group_admins(bot, chat_id, user_id, username):
 
 
 DELETE_COMMAND_COOLDOWNS = {}
+# cooldown مستقلِ «پاک عدد» (پاکسازی دسته‌ای). در این نسخه هر گروه فقط هر
+# ۵ دقیقه یک‌بار می‌تواند پاکسازی دسته‌ای بزند، نه پشت سر هم. «پاک» با
+# ریپلای همان محدودیت ۵ ثانیه‌ای قبلی را نگه می‌دارد.
+BULK_DELETE_COMMAND_COOLDOWNS = {}
 # قفلِ گروه برای اجرای پاک: فقط یک عملیات حذف در هر گروه در لحظه اجرا می‌شود
 # تا چند ادمینِ هم‌زمان روی هم نیفتند و خطای RPC ندهند.
 _DELETE_GROUP_LOCKS = {}
@@ -2661,6 +2671,70 @@ def _delete_cooldown_allowed(chat_id):
     DELETE_COMMAND_COOLDOWNS[chat_id] = now
     _prune_delete_cooldowns()
     return True
+
+
+def _prune_bulk_delete_cooldowns(window):
+    """حافظهٔ cooldown پاکسازی دسته‌ای را محدود نگه می‌دارد."""
+    now = _asyncio.get_running_loop().time()
+    cutoff = now - max(int(window), 60)
+    stale = [
+        key for key, ts in BULK_DELETE_COMMAND_COOLDOWNS.items() if ts < cutoff
+    ]
+    for key in stale:
+        BULK_DELETE_COMMAND_COOLDOWNS.pop(key, None)
+    while len(BULK_DELETE_COMMAND_COOLDOWNS) > DELETE_COOLDOWN_MAX_ENTRIES:
+        try:
+            oldest = min(
+                BULK_DELETE_COMMAND_COOLDOWNS,
+                key=BULK_DELETE_COMMAND_COOLDOWNS.get,
+            )
+            BULK_DELETE_COMMAND_COOLDOWNS.pop(oldest, None)
+        except (KeyError, ValueError):
+            break
+
+
+def _bulk_delete_cooldown_remaining(chat_id):
+    """ثانیهٔ باقی‌ماندهٔ cooldown «پاک عدد» برای این گروه (۰ یعنی مجاز).
+
+    فقط می‌خواند و چیزی ثبت نمی‌کند؛ ثبت زمان با
+    :func:`_bulk_delete_cooldown_mark` و بعد از عبور از بقیهٔ بررسی‌ها
+    انجام می‌شود تا یک دستور ردشده سهمیهٔ ۵ دقیقه را نسوزاند.
+    """
+    window = free_tier.bulk_delete_cooldown_seconds()
+    if window <= 0:
+        return 0
+    last_run = BULK_DELETE_COMMAND_COOLDOWNS.get(chat_id)
+    if last_run is None:
+        return 0
+    remaining = window - (_asyncio.get_running_loop().time() - last_run)
+    if remaining <= 0:
+        return 0
+    # رو به بالا گرد می‌شود تا پیام هرگز «۰ ثانیه» نگوید.
+    whole = int(remaining)
+    return whole + 1 if remaining > whole else max(whole, 1)
+
+
+def _bulk_delete_cooldown_mark(chat_id):
+    """شروع پاکسازی دسته‌ای را ثبت می‌کند تا cooldown از همین لحظه بشمارد."""
+    window = free_tier.bulk_delete_cooldown_seconds()
+    if window <= 0:
+        return
+    BULK_DELETE_COMMAND_COOLDOWNS[chat_id] = _asyncio.get_running_loop().time()
+    _prune_bulk_delete_cooldowns(window)
+
+
+def _format_cooldown_wait(seconds):
+    """«۴ دقیقه و ۱۲ ثانیه» از ثانیهٔ باقی‌مانده می‌سازد."""
+    total = max(int(seconds), 0)
+    minutes, secs = divmod(total, 60)
+    if minutes and secs:
+        return (
+            f"{_fullwidth_digits(minutes)} دقیقه و "
+            f"{_fullwidth_digits(secs)} ثانیه"
+        )
+    if minutes:
+        return f"{_fullwidth_digits(minutes)} دقیقه"
+    return f"{_fullwidth_digits(secs)} ثانیه"
 
 
 def _loop_now(now=None):
@@ -5851,6 +5925,7 @@ async def handle_new_message(bot, event):
                 "برکناری ادمین\n\n"
                 "یا\n\n"
                 "لغو ادمین\n\n"
+                "⚠️ در این نسخه حداکثر ۴ ادمین قابل ثبت است؛ با «لغو ادمین» یک جا آزاد می‌شود\n\n"
                 "برای اینکه ربات به یک کاربری که ادمین نیست روش ریپلای کنید و بنویسید\n\n"
                 "vip\n\n"
                 "برای لغو ریپلای کنید بنویسی\n\n"
@@ -5871,6 +5946,7 @@ async def handle_new_message(bot, event):
                 "پاک 10\n"
                 "پاک 100\n"
                 "پاک 700\n\n"
+                "⏳ پاک دسته‌ای هر ۵ دقیقه یک‌بار قابل استفاده است\n\n"
                 "🔇 سکوت کاربر:\n"
                 "روی پیام ریپلای کنید و بنویسید:\n"
                 "سکوت\n\n"
@@ -6136,9 +6212,9 @@ async def handle_new_message(bot, event):
                 "📊 آمار گروه\nنمایش آمار پیام‌ها، تعداد اعضا و کاربران فعال گروه",
                 "♻️ ریست آمار\nصفر کردن آمار گروه (تعداد اعضا باقی می‌ماند)",
                 "✏️ تغییر اسم گروه:\n!اسم نام جدید گروه",
-                "👑 مدیریت ادمین‌ها:\n\n➕ افزودن ادمین:\n\nمالک گروه روی پیام کاربر ریپلای کند و بنویسد:\nثبت ادمین\n\nبرای برکناری ادمین بنویسید:\n\nبرای برکناری ادمین:\nمالک گروه روی پیام ادمین ریپلای کند و بنویسد:\n\nبرکناری ادمین\n\nیا\n\nلغو ادمین",
+                "👑 مدیریت ادمین‌ها:\n\n➕ افزودن ادمین:\n\nمالک گروه روی پیام کاربر ریپلای کند و بنویسد:\nثبت ادمین\n\nبرای برکناری ادمین بنویسید:\n\nبرای برکناری ادمین:\nمالک گروه روی پیام ادمین ریپلای کند و بنویسد:\n\nبرکناری ادمین\n\nیا\n\nلغو ادمین\n\n⚠️ در این نسخه حداکثر ۴ ادمین قابل ثبت است",
                 "🛡️ حالت سختگیرانه:\n\nفعال سازی:\nفعال کلمات ممنوعه\n\nغیرفعال سازی:\nلغو کلمات ممنوعه",
-                "🗑️ حذف پیام:\nحذف یک پیام با ریپلای:\nپاک\n\nحذف چند پیام آخر گروه:\n\nپاک + عدد مورد نیاز\n\nمثال:\nپاک 10\nپاک 100\nپاک 700",
+                "🗑️ حذف پیام:\nحذف یک پیام با ریپلای:\nپاک\n\nحذف چند پیام آخر گروه:\n\nپاک + عدد مورد نیاز\n\nمثال:\nپاک 10\nپاک 100\nپاک 700\n\n⏳ پاک دسته‌ای هر ۵ دقیقه یک‌بار قابل استفاده است",
                 "🔇 سکوت کاربر:\nروی پیام ریپلای کنید و بنویسید:\nسکوت",
                 "🔊 رفع سکوت کاربر:\nروی پیام ریپلای کنید و بنویسید:\nرفع سکوت",
                 "🚪 اخراج کاربر:\nروی پیام ریپلای کنید و بنویسید:\nاخراج",
@@ -6667,6 +6743,16 @@ async def handle_new_message(bot, event):
                     return
 
                 admin_username = getattr(admin_user, "username", None)
+                # سقف ثبت ادمین در این نسخه. فقط ثبتِ ادمین *جدید* شمرده
+                # می‌شود؛ «لغو ادمین» بلافاصله یک جا آزاد می‌کند، پس گروهی
+                # که از ۴ به ۳ برسد دوباره می‌تواند یک ادمین ثبت کند.
+                if not is_admin(chat_id, admin_user.id, admin_username):
+                    if not free_tier.admin_registration_allowed(
+                        count_admins(chat_id)
+                    ):
+                        await event.reply(free_tier.ADMIN_LIMIT_MESSAGE)
+                        return
+
                 if add_admin(chat_id, admin_user.id, admin_username):
                     # Bold با ** (Markdown پیش‌فرض). نام کاربری و در نبود
                     # آن، نام نمایشی از policy واحد format_user می‌آید.
@@ -6747,6 +6833,17 @@ async def handle_new_message(bot, event):
                     await event.reply(free_tier.PAYWALL_MESSAGE)
                     return
 
+                # پاکسازی دسته‌ای هر ۵ دقیقه یک‌بار برای هر گروه، نه پشت سر
+                # هم. فقط خوانده می‌شود؛ ثبت زمان بعد از عبور از بررسی‌های
+                # بعدی انجام می‌شود.
+                bulk_wait = _bulk_delete_cooldown_remaining(chat_id)
+                if bulk_wait:
+                    await event.reply(
+                        "⏳ دستور پاک گروهی هر ۵ دقیقه یک‌بار قابل استفاده است\n"
+                        f"{_format_cooldown_wait(bulk_wait)} دیگر دوباره تلاش کنید"
+                    )
+                    return
+
                 # cooldown و Lock برای کل گروه، نه فقط هر کاربر؛ تا چند
                 # ادمینِ هم‌زمان روی هم نیفتند و محدودیت ۵ ثانیه رعایت شود.
                 if not _delete_cooldown_allowed(chat_id):
@@ -6754,6 +6851,8 @@ async def handle_new_message(bot, event):
                         "لطفا ۵ ثانیه صبر کنید تا پاکسازی قبلی کامل شود ⏳"
                     )
                     return
+
+                _bulk_delete_cooldown_mark(chat_id)
                 lock = _delete_group_lock(chat_id)
                 async with lock:
                     messages = await bot.client.get_messages(

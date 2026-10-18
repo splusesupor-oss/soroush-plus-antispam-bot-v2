@@ -33,10 +33,26 @@ FEATURES = {
     "vip": {"free": False, "description": "مدیریت VIP"},
     "search": {"free": True, "description": "جستجوی مطالب و آهنگ"},
     "font_creation": {"free": True, "description": "ساخت فونت"},
+    "unlimited_admins": {"free": False, "description": "ثبت ادمین بدون سقف"},
+    "bulk_delete_no_cooldown": {
+        "free": False,
+        "description": "پاک دسته‌ای بدون وقفهٔ ۵ دقیقه",
+    },
     # Explicitly preserved free routes.
     "bulk_delete_up_to_500": {"free": True, "description": "پاک ۱ تا ۵۰۰"},
     "unban_by_reply": {"free": True, "description": "آزادسازی با ریپلای"},
 }
+
+# Free edition ceilings. ``feature_for_text`` deliberately does not map these
+# to a command name: the commands themselves stay free, only the quota is
+# capped, so the handlers consult the helpers below instead of being blocked.
+FREE_ADMIN_REGISTRATION_LIMIT = 4
+FREE_BULK_DELETE_COOLDOWN_SECONDS = 300
+
+ADMIN_LIMIT_MESSAGE = (
+    "❌ در این نسخه فقط ۴ ادمین قابل ثبت است\n"
+    "برای ثبت ادمین جدید، اول یکی از ادمین‌های فعلی را با «لغو ادمین» برکنار کنید"
+)
 
 PREMIUM_PLANS = frozenset({"premium", "pro", "paid", "full"})
 PLAN_FEATURES = {
@@ -90,6 +106,43 @@ def is_enabled(feature: str) -> bool:
     if feature not in FEATURES:
         return False
     return feature in PLAN_FEATURES[current_plan()]
+
+
+def admin_registration_limit() -> Optional[int]:
+    """Maximum registered admins per group; ``None`` means unlimited.
+
+    The premium plan keeps the historical behaviour (no ceiling); the free
+    edition is capped at :data:`FREE_ADMIN_REGISTRATION_LIMIT`.
+    """
+    if is_enabled("unlimited_admins"):
+        return None
+    return FREE_ADMIN_REGISTRATION_LIMIT
+
+
+def admin_registration_allowed(current_count: object) -> bool:
+    """Whether one more admin may be registered given ``current_count``.
+
+    Removing an admin frees a slot immediately, so a group that drops from 4
+    to 3 registered admins can register a new one again.
+    """
+    limit = admin_registration_limit()
+    if limit is None:
+        return True
+    try:
+        count = int(current_count)
+    except (TypeError, ValueError):
+        count = 0
+    return count < limit
+
+
+def bulk_delete_cooldown_seconds() -> int:
+    """Minimum gap between two «پاک N» runs in the same group.
+
+    Returns ``0`` on premium so back-to-back cleanups stay available there.
+    """
+    if is_enabled("bulk_delete_no_cooldown"):
+        return 0
+    return FREE_BULK_DELETE_COOLDOWN_SECONDS
 
 
 def parse_bulk_delete_count(text: object):
